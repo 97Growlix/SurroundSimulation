@@ -52,7 +52,6 @@ if body is None:
     raise ValueError("No Body found")
 
 # Check volume
-print("Body volume:", body.Shape.Volume)
 volume = body.Shape.Volume
 # Export
 Part.export([body], stepout_path)

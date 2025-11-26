@@ -20,7 +20,7 @@ SurroundDepthRange = (25, 50)
 SurroundApexOffsetRange = (-5, 5)
 
 #Initial guesses
-ConeSideThicknessGuess = 4.0
+ConeSideThicknessGuess = 3.0
 MiddleThicknessGuess = 2.8
 EnclosureSideThicknessGuess = 1.6
 EnclosureLaunchAngleGuess = 93
@@ -31,23 +31,25 @@ SurroundApexOffsetGuess = -0.2 #'Distance from centerline bw enclosure and cone 
 #Non-optimization CAD parameters and such 
 NOPs = NonOptimParams()
 
-NOPs.ConeWidth =300
-NOPs.ConeHeight = 300
+NOPs.ConeWidth =732.8
+NOPs.ConeHeight = 1052.6
 NOPs.ConeCornerRadius = 100
-NOPs.ConeOffset = 5  #'Distance the cone protrudes outward from enclosure
-NOPs.ConeEnclosureGap = 32
-NOPs.MountingGap = 1
+NOPs.ConeOffset = -1  #'Distance the cone protrudes outward from enclosure
+NOPs.ConeEnclosureGap = 36
+NOPs.MountingGap = 0.5
+NOPs.MountFlangeThickness = 2
 
 
 #Other things
 NOPs.cadfile_path = r"C:\Users\Gaming pc\Documents\SurroundSimulation\SurroundQuarter.FCStd"
 NOPs.stepout_path = r"C:\Users\Gaming pc\Documents\SurroundSimulation\QuarterSurround.step"
-NOPs.Xmax = 0.5 #mm one way
-NOPs.TargetStiffness = 10 #N/mm
-NOPs.OptimizationWeights = [("Kms Flatness", 1e4), ("Kms90 Flatness", 2e3), ("Volume", 1e-5), ("Delta^2 from TargetStiffness", 2e-3)]
+NOPs.Xmax = 3 #mm one way
+NOPs.TargetStiffness = 1 #N/mm
+NOPs.OptimizationWeights = [("Kms Flatness", 1e3), ("Kms90 Flatness", 2e4), ("Volume", 5e-6), ("Delta^2 from TargetStiffness", 3e-3)]
 NOPs.MaterialCoefficients = [3.065, -1.287] #C10, C01
-NOPs.MeshSize = 4
-NOPs.N_Steps = 5
+NOPs.MeshFine = 3
+NOPs.MeshCoarse = 8
+NOPs.N_Steps = 4
 NOPs.Node_find_tol = 1e-6
 
 Iter =0
@@ -75,7 +77,8 @@ def objective(OptP, NOPs):
         params = [("ConeSideThickness", OptP[0]), ("MiddleThickness", OptP[1]), ("EnclosureSideThickness", OptP[2]), 
                 ("EnclosureLaunchAngle", OptP[3]), ("ConeLaunchAngle", OptP[4]), ("SurroundDepth", OptP[5]), ("SurroundApexOffset", OptP[6]), 
                 ("ConeWidth", NOPs.ConeWidth), ("MountingGap", NOPs.MountingGap), ("ConeEnclosureGap", NOPs.ConeEnclosureGap),
-                ("ConeHeight", NOPs.ConeHeight), ("ConeCornerRadius", NOPs.ConeCornerRadius), ("ConeOffset", NOPs.ConeOffset)]
+                ("ConeHeight", NOPs.ConeHeight), ("ConeCornerRadius", NOPs.ConeCornerRadius), ("ConeOffset", NOPs.ConeOffset), 
+                ("MountFlangeThickness", NOPs.MountFlangeThickness)]
        
         #This modifies the cad file and exports as a step
         Volume = ModEx(NOPs.cadfile_path, NOPs.stepout_path, params)

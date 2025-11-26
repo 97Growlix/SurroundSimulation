@@ -7,28 +7,6 @@ import matplotlib.pyplot as plt
 from felupe.constitution.tensortrax.models.hyperelastic import mooney_rivlin
 from SurroundClasses import *
 
-#Non-optimization CAD parameters and such 
-NOPs = NonOptimParams()
-
-NOPs.ConeWidth =110
-NOPs.ConeHeight = 105
-NOPs.ConeCornerRadius = 100
-NOPs.ConeOffset = 5.0  #'Distance the cone protrudes outward from enclosure
-NOPs.ConeEnclosureGap = 32
-NOPs.MountingGap = 1
-
-
-#Other things
-NOPs.cadfile_path = r"C:\Users\Gaming pc\Documents\SurroundSimulation\SurroundQuarter.FCStd"
-NOPs.stepout_path = r"C:\Users\Gaming pc\Documents\SurroundSimulation\QuarterSurround.step"
-NOPs.Xmax = 0.5 #mm one way
-NOPs.TargetStiffness = 10 #N/mm
-NOPs.OptimizationWeights = [("Kms Flatness", 1e4), ("Kms90 Flatness", 2e3), ("Volume", 1e-5), ("Delta^2 from TargetStiffness", 2e-3)]
-NOPs.MaterialCoefficients = [3.065, -1.287] #C10, C01
-NOPs.MeshSize = 4
-NOPs.N_Steps = 5
-NOPs.Node_find_tol = 1e-6
-
 
 def AnalyzeItBothWays(NOPs):
     KmsOut, DispOut, field = AnalyzeItOneWay(NOPs)
@@ -53,28 +31,33 @@ def LocalRF(job, mask):  #finds the rf for masked nodes at the last step of the 
         masked_rfs = force_reshaped[mask, 2]
         rf = sum(masked_rfs)
 
-        print('localr')
-        print(sum(masked_rfs))
-
         return rf
 
-def ShowItOff(NOPs):
-    import os
-    import subprocess
-    import imageio
-
-    ####
-    #User settings
-    ####
-
-    ###
-    #Gmsh stuff
-    ###
+def CreateFeField(NOPs):
 
     gmsh.initialize()
     gmsh.option.setNumber("General.Verbosity", 1)
+
     gmsh.open(NOPs.stepout_path)
-    gmsh.model.mesh.setSize(gmsh.model.getEntities(0), NOPs.MeshSize)
+
+    Refinement_pt_a = [NOPs.ConeWidth/2 - NOPs.ConeCornerRadius, NOPs.ConeHeight/2- NOPs.ConeCornerRadius, NOPs.ConeOffset]
+    #Refinement_pt_b = [NOPs.ConeWidth, NOPs.ConeHeight - NOPs.ConeCornerRadius, NOPs.ConeOffset]
+
+    dist_field = gmsh.model.mesh.field.add("Distance")
+
+    pt_tag = gmsh.model.geo.addPoint(*Refinement_pt_a, 0)
+    gmsh.model.geo.synchronize()
+    gmsh.model.mesh.field.setNumbers(dist_field, "NodesList", [pt_tag])
+
+    th_field = gmsh.model.mesh.field.add("Threshold")
+    gmsh.model.mesh.field.setNumber(th_field, "InField", dist_field)
+    gmsh.model.mesh.field.setNumber(th_field, "SizeMin", NOPs.MeshFine)
+    gmsh.model.mesh.field.setNumber(th_field, "SizeMax", NOPs.MeshCoarse)
+    gmsh.model.mesh.field.setNumber(th_field, "DistMin", NOPs.ConeCornerRadius*1.1)
+    gmsh.model.mesh.field.setNumber(th_field, "DistMax", NOPs.ConeCornerRadius*2)
+
+    gmsh.model.mesh.field.setAsBackgroundMesh(th_field)
+
     gmsh.model.mesh.generate(3)
 
     gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)  # version 2.2
@@ -82,18 +65,8 @@ def ShowItOff(NOPs):
 
     gmsh.write("surround.msh")
 
-
-    ###
-    #Visualization if you want to look at the mesh in gmsh's thing
-    ###
-
     #gmsh.fltk.run()
     #gmsh.finalize()
-
-
-    ####
-    #import mesh into felupe
-    ####
 
     # Read the Gmsh mesh
     msh_file = "surround.msh"
@@ -126,13 +99,9 @@ def ShowItOff(NOPs):
     u = fe.Field(region, dim=3)
     field = fe.FieldContainer([u])
 
+    return field.copy(), tetra_mesh, tetra_cells, points
 
-    #print("FElupe mesh ready:")
-    print("Number of points in mesh:", tetra_mesh.points.shape[0])
-    #print("Number of tetrahedra:", tetra_cells.shape[0])
-    #print("Quadrature:", tetra_mesh.quadrature)
-
-
+def CreateBCs(NOPs, field, points):
     #masking
     #Inner Curved Surface
     Arc_Center_X = NOPs.ConeWidth/2 - NOPs.ConeCornerRadius
@@ -200,6 +169,11 @@ def ShowItOff(NOPs):
         mask = (Inner_mask | Inner_top_mask | Inner_right_mask),            # selects all nodes from the earlier mask
         skip=(True, True, False) # constrain only Z (doesn't actually matter I think)
     )
+    bc_cone = fe.Boundary(
+        field[0],
+        mask = (Inner_mask | Inner_top_mask | Inner_right_mask),            # selects all nodes from the earlier mask
+        skip=(False, False, True) # constrain only Z (doesn't actually matter I think)
+    )
 
     #group all the bcs together
     bcs = dict()
@@ -207,8 +181,29 @@ def ShowItOff(NOPs):
     bcs["symy"] = bc_symy
     bcs["ground"] = bc_bottom
     bcs["move_z"] = move_z
+    bcs["bc_cone"] = bc_cone
+
+    masks = dict()
+    masks["InnerMask"] = Inner_mask
+    masks["InnerTop"] = Inner_top_mask
+    masks["InnerRight"] = Inner_right_mask
+    masks["Outer"] = Outer_anchored_mask
 
 
+    return bcs, masks
+
+def ShowItOff(NOPs):
+    import os
+    import subprocess
+    import imageio
+
+    field, tetra_mesh, tetra_cells, points = CreateFeField(NOPs)
+
+    bcs, masks = CreateBCs(NOPs, field, points)
+    #print("FElupe mesh ready:")
+    print("Number of points in mesh:", tetra_mesh.points.shape[0])
+    #print("Number of tetrahedra:", tetra_cells.shape[0])
+    #print("Quadrature:", tetra_mesh.quadrature)
 
     #pyvista visualization
 
@@ -216,7 +211,6 @@ def ShowItOff(NOPs):
     cells_pv = np.hstack([np.full((tetra_cells.shape[0], 1), 4), tetra_cells]).flatten()
 
     #format the data for pyvista
-    points = msh.points
     grid = pv.UnstructuredGrid(cells_pv, np.full(tetra_cells.shape[0], 10), points)
 
 
@@ -228,14 +222,14 @@ def ShowItOff(NOPs):
         nodes_cloud = pv.PolyData(points[nodes])
         # glyph spheres with radius 1% of bounding box size
         bbox = grid.bounds
-        radius = 0.01 * max(bbox[1]-bbox[0], bbox[3]-bbox[2], bbox[5]-bbox[4])
-        glyphs = nodes_cloud.glyph(scale=False, geom=pv.Sphere(radius=radius))
+        radius = 0.005 * max(bbox[1]-bbox[0], bbox[3]-bbox[2], bbox[5]-bbox[4])
+        glyphs = nodes_cloud.glyph(scale=False, geom=pv.Sphere(radius=radius), orient = False)
         pv_plotter.add_mesh(glyphs, color=color)
 
-    add_bc_nodes(pv_plotter, bc_symx.points, 'red')
-    add_bc_nodes(pv_plotter, bc_symy.points, 'green')
-    add_bc_nodes(pv_plotter, bc_bottom.points, 'blue')
-    add_bc_nodes(pv_plotter, move_z.points, 'orange')
+    add_bc_nodes(pv_plotter, bcs["symx"].points, 'red')
+    add_bc_nodes(pv_plotter, bcs["symy"].points, 'green')
+    add_bc_nodes(pv_plotter, bcs["ground"].points, 'blue')
+    add_bc_nodes(pv_plotter, bcs["move_z"].points, 'orange')
 
 
     ##unconnemt this to show boundary conds
@@ -317,7 +311,7 @@ def ShowItOff(NOPs):
 
     # Create plotter window (visible)
     pl = pv.Plotter(window_size=(900, 700))
-    pl.camera_position = [(-125.0,-125.0,-25),(50.0,75.0,7.0),(0.0,0.0,1.0)]
+    pl.camera_position = [(NOPs.ConeWidth/2,-125.0, 7.0),(NOPs.ConeWidth/2,0, 7.0),(0.0,0.0,1.0)]
     pl.add_mesh(deformed_meshes[0], show_edges=True)
     pl.add_text("Mesh displacement animation", font_size=10)
     cpos = pl.camera_position
@@ -344,13 +338,10 @@ def ShowItOff(NOPs):
         
 
     # Extract data I want
-
-    CurveRf = LocalRF(job_out, Inner_mask)
-    InnerTopRF = LocalRF(job_out, Inner_top_mask)
-    InnerRightRF = LocalRF(job_out, Inner_right_mask)
-
-    Len_curve = NOPs.ConeCornerRadius *np.pi/2
-    Len_straights = (NOPs.ConeHeight + NOPs.ConeWidth)/2 -2* NOPs.ConeCornerRadius
+    #split rfs between straight and curved sections
+    CurveRf = LocalRF(job_out, masks["InnerMask"])
+    InnerTopRF = LocalRF(job_out, masks["InnerTop"])
+    InnerRightRF = LocalRF(job_out, masks["InnerRight"])
 
     Angle_to_top_corner = np.arctan2(NOPs.ConeHeight/2+NOPs.ConeCornerRadius, NOPs.ConeWidth/2)  #abs angle to top starting part of arc
     Angle_to_bottom_corner = np.arctan2(NOPs.ConeHeight/2, NOPs.ConeWidth/2+NOPs.ConeCornerRadius)#abs angle to bottom point of arc
@@ -361,16 +352,9 @@ def ShowItOff(NOPs):
     Angular_span_straight = np.degrees(Angle_to_bottom_corner + (np.pi/2-Angle_to_top_corner))
     Rf_per_deg_straight = (InnerTopRF + InnerRightRF)/Angular_span_straight
 
-    print('spans')
-    print(Angular_span_curve)
-    print(Angular_span_straight)
-
-    print('F/deg')
+    print('Reaction force in Newtons per degree (curve vs flat section)')
     print(Rf_per_deg_curve)
     print(Rf_per_deg_straight)
-
-    print("totrf") 
-    print(CurveRf+ InnerRightRF+ InnerTopRF)
 
     disp_out = np.array([d[2] for d in job_out.x])      # Z displacement
     force_out = 4*np.array([f[2] for f in job_out.y])     # Z reaction force (total)
@@ -418,150 +402,15 @@ def AnalyzeItOneWay(NOPs, fe_mesh_field = None):
     C01 = NOPs.MaterialCoefficients[1]
 
     if fe_mesh_field == None:
-        ###
-        #Gmsh stuff
-        ###
-
-        gmsh.initialize()
-        gmsh.option.setNumber("General.Verbosity", 1)
-        gmsh.open(NOPs.stepout_path)
-
-        volumes = gmsh.model.getEntities(dim=3)
-        print("Volumes:", volumes)
-        if len(volumes) == 0:
-            raise ValueError("No 3D volumes found in STEP file")
-
-        gmsh.model.mesh.setSize(gmsh.model.getEntities(0), NOPs.MeshSize)
-        gmsh.model.mesh.generate(3)
-
-        gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)  # version 2.2
-        gmsh.option.setNumber("Mesh.Binary", 0)            # ASCII, not binary
-
-        gmsh.write("surround.msh")
-
-
-        ####
-        #import mesh into felupe
-        ####
-
-        # Read the Gmsh mesh
-        msh_file = "surround.msh"
-        msh = meshio.read(msh_file)
-
-        # Extract points
-        points = msh.points
-
-        # Extract tetrahedral cells
-        tetra_cells = None
-        for cell_block in msh.cells:
-            if cell_block.type == "tetra":
-                tetra_cells = cell_block.data
-                break
-
-        if tetra_cells is None:
-            raise ValueError("No tetrahedral mesh found in the file")
-
-        # Create the FElupe mesh
-        tetra_mesh = fe.Mesh(points, tetra_cells, cell_type = "tetra")
-
-        # Assign quadrature for tetrahedra
-        quad = fe.quadrature.Tetrahedron(order=2)
-        tetra_mesh.quadrature = quad
-        elem = fe.element.Tetra()
-        # Create a region over all tetra cells
-        region = fe.Region(tetra_mesh, elem, quadrature=quad)
-
-        # Create a field
-        u = fe.Field(region, dim=3)
-        field = fe.FieldContainer([u])
-
-
-        print("FElupe mesh ready:")
-        print("Number of points:", tetra_mesh.points.shape[0])
-        print("Number of tetrahedra:", tetra_cells.shape[0])
-        print("Quadrature:", tetra_mesh.quadrature)
-
-        fe_mesh_field = field.copy()
+        field, tetra_mesh, tetra_cells, points = CreateFeField(NOPs)
     
     else:
         field = fe_mesh_field
         tetra_mesh = field[0].region.mesh
+        points = tetra_mesh.points
 
-    #masking
-    #Inner Curved Surface
-    Arc_Center_X = NOPs.ConeWidth/2 - NOPs.ConeCornerRadius
-    Arc_Center_Y = NOPs.ConeHeight/2 - NOPs.ConeCornerRadius
-    Z_Height = NOPs.ConeOffset
-    tol = NOPs.Node_find_tol
-
-    x_mod = points[:,0] - Arc_Center_X
-    y_mod = points[:,1] - Arc_Center_Y
-    z = points[:,2]
-
-    r = np.sqrt(x_mod**2 + y_mod**2)
-
-    R_outer_for_inner = NOPs.ConeCornerRadius+tol
-    R_inner_for_outer = NOPs.ConeCornerRadius+NOPs.ConeEnclosureGap
-
-    Inner_mask = (np.abs(z - Z_Height) <= tol) &\
-        (r<=R_outer_for_inner) &\
-        (x_mod>=-tol) & (y_mod>=-tol)
-    
-    #InnerTop
-    Inner_top_mask = (np.abs(z - Z_Height) <= tol) &\
-        (x_mod <= tol) & (y_mod <= NOPs.ConeCornerRadius + tol)
-
-    #InnerRight
-    Inner_right_mask = (np.abs(z - Z_Height) <= tol) &\
-        (y_mod <= tol) &\
-        (x_mod <= NOPs.ConeCornerRadius + tol)
-
-    #Outer anchored surface
-
-    Outer_anchored_mask = ((np.abs(z) <= tol)) &\
-        (((r>=R_inner_for_outer) & (x_mod >= -tol) & (y_mod >= -tol)) |\
-        ((y_mod>=NOPs.ConeCornerRadius + NOPs.ConeEnclosureGap) | (x_mod >= NOPs.ConeCornerRadius + NOPs.ConeEnclosureGap)))
-
-
-
-    ###
-    #boundary cond
-    ###
-
-    # Symmetry plane at x=0, fix only x displacement
-    bc_symx = fe.Boundary(
-        field[0],
-        fx=0.0,             # select points where x ≈ 0
-        skip=(False, True, True)  # fix x, skip y and z
-    )
-
-    # Symmetry plane at y=0, fix only y displacement
-    bc_symy = fe.Boundary(
-        field[0],
-        fy=0.0,             # select points where y ≈ 0
-        skip=(True, False, True)  # fix y, skip x and z
-    )
-
-    # Fixed support at z=0, fix all components
-    bc_bottom = fe.Boundary(
-        field[0],
-        mask = Outer_anchored_mask,             # select points where z ≈ 0
-        skip = (False, False, False)
-    )
-    #Create BC for applying displacements later
-    move_z = fe.Boundary(
-        field[0],
-        mask = (Inner_mask | Inner_top_mask | Inner_right_mask),            # selects all nodes from the earlier mask
-        skip=(True, True, False) # constrain only Z (doesn't actually matter I think)
-    )
-
-    #group all the bcs together
-    bcs = dict()
-    bcs["symx"] = bc_symx
-    bcs["symy"] = bc_symy
-    bcs["ground"] = bc_bottom
-    bcs["move_z"] = move_z
-
+    bcs, masks = CreateBCs(NOPs, field, points)
+   
     ###
     #material data
     ###
@@ -574,7 +423,7 @@ def AnalyzeItOneWay(NOPs, fe_mesh_field = None):
     
     # Define the displacement “ramp” (0 → some value) in linsteps
 
-    steps = fe.math.linsteps([0,NOPs.Xmax], num=NOPs.N_Steps)
+    steps = fe.math.linsteps([0,NOPs.Xmax], num=round(NOPs.N_Steps/2))
     
     # Define a step
     step = fe.Step(
@@ -601,9 +450,7 @@ def AnalyzeItOneWay(NOPs, fe_mesh_field = None):
 
 def main():
 
-    
-
-    AnalyzeItOneWay(NOPs)
+  
     return 0 
 
 if __name__ == "__main__":

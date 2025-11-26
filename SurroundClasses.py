@@ -13,7 +13,8 @@ class NonOptimParams:
         self.TargetStiffness = None
         self.OptimizationWeights = None
         self.MaterialCoefficients = None
-        self.MeshSize = None
+        self.MeshFine = None
+        self.MeshCoarse = None
         self.N_Steps = None
-        
+        self.MountFlangeThickness = None
     pass
