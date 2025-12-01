@@ -14,7 +14,7 @@ def ModEx(cadfile_path, stepout_path, params):
     result = subprocess.run(
         [
             r"C:\Program Files\FreeCAD 1.0\bin\python.exe",
-            r"C:\Users\Gaming pc\Documents\SurroundSimulation\StepfileModifierSubprocess.py",
+            r"C:\Users\Gaming pc\Documents\GitHub\SurroundSimulation\StepfileModifierSubprocess.py",
             cadfile_path,
             stepout_path,
             params_json,

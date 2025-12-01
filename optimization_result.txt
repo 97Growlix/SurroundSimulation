@@ -5,12 +5,13 @@ direc : [[1. 0. 0. 0. 0. 0. 0.]
  [0. 0. 0. 0. 1. 0. 0.]
  [0. 0. 0. 0. 0. 1. 0.]
  [0. 0. 0. 0. 0. 0. 1.]]
-fun : 0
+fun : 1000000000.0
 message : Maximum number of function evaluations has been exceeded.
-nfev : 1
+nfev : 50
 nit : 0
 status : 1
 success : False
-x : [ 3.   2.8  1.6 93.  96.  25.3 -0.2]
+x : [ 3.99993687  3.99993687  2.5        96.5        95.8        39.75
+ 40.        ]
 Best tracked score: inf
 Best tracked params: None

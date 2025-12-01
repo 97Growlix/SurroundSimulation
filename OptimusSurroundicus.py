@@ -19,6 +19,7 @@ EnclosureLaunchAngleRange = (85, 102)
 ConeLaunchAngleRange = (85, 102)
 SurroundDepthRange = (25, 50)
 SurroundApexOffsetRange = (-5, 5)  #Not using anymore
+ConeEnclosureGapRange = (30,50)
 
 #Initial guesses
 ConeSideThicknessGuess = 2.68
@@ -28,6 +29,7 @@ EnclosureLaunchAngleGuess = 96.5
 ConeLaunchAngleGuess = 95.8
 SurroundDepthGuess = 39.75
 SurroundApexOffsetGuess = -0.2 #'Distance from centerline bw enclosure and cone towards cone
+ConeEnclosureGapGuess = 40
 
 #Non-optimization geometry parameters and such 
 NOPs = NonOptimParams()
@@ -36,14 +38,13 @@ NOPs.ConeWidth =732.8
 NOPs.ConeHeight = 1052.6
 NOPs.ConeCornerRadius = 199
 NOPs.ConeOffset = -1  #'Distance the cone protrudes outward from enclosure
-NOPs.ConeEnclosureGap = 31
 NOPs.MountingGap = 0.5
 NOPs.MountFlangeThickness = 2
 
 
 #Other things
-NOPs.cadfile_path = r"C:\Users\Gaming pc\Documents\SurroundSimulation\SurroundQuarter.FCStd"
-NOPs.stepout_path = r"C:\Users\Gaming pc\Documents\SurroundSimulation\QuarterSurround.step"
+NOPs.cadfile_path = r"C:\Users\Gaming pc\Documents\GitHub\SurroundSimulation\SurroundQuarter.FCStd"
+NOPs.stepout_path = r"C:\Users\Gaming pc\Documents\GitHub\SurroundSimulation\QuarterSurround.step"
 NOPs.Xmax = 45 #mm one way
 NOPs.TargetStiffness = 1 #N/mm
 NOPs.OptimizationWeights = [("Kms Flatness", 5e3), ("Kms90 Flatness", 1e5), ("Volume", 1e-6), ("Delta^2 from TargetStiffness", 5e-2)]
@@ -60,11 +61,11 @@ Iter =0
 
 ##tidy up user inputs into lists/arrays
 bounds = [ConeSideThicknessRange, MiddleThicknessRange, EnclosureSideThicknessRange, 
-          EnclosureLaunchAngleRange, ConeLaunchAngleRange, SurroundDepthRange]
+          EnclosureLaunchAngleRange, ConeLaunchAngleRange, SurroundDepthRange, ConeEnclosureGapRange]
 
 #Initial guess
 x0 = np.array([ConeSideThicknessGuess, MiddleThicknessGuess, EnclosureSideThicknessGuess, 
-               EnclosureLaunchAngleGuess, ConeLaunchAngleGuess, SurroundDepthGuess])
+               EnclosureLaunchAngleGuess, ConeLaunchAngleGuess, SurroundDepthGuess, ConeEnclosureGapGuess])
 
 #global vars to track best solution if optimizer doesn't converge
 best_x = None
@@ -78,10 +79,14 @@ def objective(OptP, NOPs):
     
         #params used to create surround geometry
         params = [("ConeSideThickness", OptP[0]), ("MiddleThickness", OptP[1]), ("EnclosureSideThickness", OptP[2]), 
-                ("EnclosureLaunchAngle", OptP[3]), ("ConeLaunchAngle", OptP[4]), ("SurroundDepth", OptP[5]), 
-                ("ConeWidth", NOPs.ConeWidth), ("MountingGap", NOPs.MountingGap), ("ConeEnclosureGap", NOPs.ConeEnclosureGap),
+                ("EnclosureLaunchAngle", OptP[3]), ("ConeLaunchAngle", OptP[4]), ("SurroundDepth", OptP[5]), ("ConeEnclosureGap", OptP[6]),
+                ("ConeWidth", NOPs.ConeWidth), ("MountingGap", NOPs.MountingGap),
                 ("ConeHeight", NOPs.ConeHeight), ("ConeCornerRadius", NOPs.ConeCornerRadius), ("ConeOffset", NOPs.ConeOffset), 
                 ("MountFlangeThickness", NOPs.MountFlangeThickness)]
+        
+        NOPs.ConeEnclosureGap = OptP[6]  ## yes I know it's technically an optimized parameter and using this in this way isn't very easy to read. I'll fix it later :)
+
+        print(params[0:6])
        
         #This modifies the cad file and exports as a step
         Volume = ModEx(NOPs.cadfile_path, NOPs.stepout_path, params)
@@ -136,8 +141,8 @@ def objective(OptP, NOPs):
 
 def FinishOut(OptP):
     params = [("ConeSideThickness", OptP[0]), ("MiddleThickness", OptP[1]), ("EnclosureSideThickness", OptP[2]), 
-                ("EnclosureLaunchAngle", OptP[3]), ("ConeLaunchAngle", OptP[4]), ("SurroundDepth", OptP[5]), 
-                ("ConeWidth", NOPs.ConeWidth), ("MountingGap", NOPs.MountingGap), ("ConeEnclosureGap", NOPs.ConeEnclosureGap),
+                ("EnclosureLaunchAngle", OptP[3]), ("ConeLaunchAngle", OptP[4]), ("SurroundDepth", OptP[5]), ("ConeEnclosureGap", OptP[6]),
+                ("ConeWidth", NOPs.ConeWidth), ("MountingGap", NOPs.MountingGap),
                 ("ConeHeight", NOPs.ConeHeight), ("ConeCornerRadius", NOPs.ConeCornerRadius), ("ConeOffset", NOPs.ConeOffset)]
     
     Volume = ModEx(NOPs.cadfile_path, NOPs.stepout_path, params)
