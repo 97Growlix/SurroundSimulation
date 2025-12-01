@@ -5,37 +5,38 @@ from RunSubprocess import ModEx
 from scipy.optimize import minimize
 from SurroundClasses import *
 import traceback
+import time
 
 ###
 #define user things
 ###
 
 #Optimization CAD parameter ranges
-ConeSideThicknessRange = (1.5, 5)
-MiddleThicknessRange = (1.5, 5)
-EnclosureSideThicknessRange = (1.5,5)
-EnclosureLaunchAngleRange = (85, 130)
-ConeLaunchAngleRange = (85, 130)
+ConeSideThicknessRange = (1.5, 4)
+MiddleThicknessRange = (1.5, 4)
+EnclosureSideThicknessRange = (1.5,4)
+EnclosureLaunchAngleRange = (85, 102)
+ConeLaunchAngleRange = (85, 102)
 SurroundDepthRange = (25, 50)
-SurroundApexOffsetRange = (-5, 5)
+SurroundApexOffsetRange = (-5, 5)  #Not using anymore
 
 #Initial guesses
-ConeSideThicknessGuess = 3.0
-MiddleThicknessGuess = 2.8
-EnclosureSideThicknessGuess = 1.6
-EnclosureLaunchAngleGuess = 93
-ConeLaunchAngleGuess = 96
-SurroundDepthGuess = 25.3
+ConeSideThicknessGuess = 2.68
+MiddleThicknessGuess = 2.02
+EnclosureSideThicknessGuess = 2.50
+EnclosureLaunchAngleGuess = 96.5
+ConeLaunchAngleGuess = 95.8
+SurroundDepthGuess = 39.75
 SurroundApexOffsetGuess = -0.2 #'Distance from centerline bw enclosure and cone towards cone
 
-#Non-optimization CAD parameters and such 
+#Non-optimization geometry parameters and such 
 NOPs = NonOptimParams()
 
 NOPs.ConeWidth =732.8
 NOPs.ConeHeight = 1052.6
-NOPs.ConeCornerRadius = 100
+NOPs.ConeCornerRadius = 199
 NOPs.ConeOffset = -1  #'Distance the cone protrudes outward from enclosure
-NOPs.ConeEnclosureGap = 36
+NOPs.ConeEnclosureGap = 31
 NOPs.MountingGap = 0.5
 NOPs.MountFlangeThickness = 2
 
@@ -43,39 +44,41 @@ NOPs.MountFlangeThickness = 2
 #Other things
 NOPs.cadfile_path = r"C:\Users\Gaming pc\Documents\SurroundSimulation\SurroundQuarter.FCStd"
 NOPs.stepout_path = r"C:\Users\Gaming pc\Documents\SurroundSimulation\QuarterSurround.step"
-NOPs.Xmax = 3 #mm one way
+NOPs.Xmax = 45 #mm one way
 NOPs.TargetStiffness = 1 #N/mm
-NOPs.OptimizationWeights = [("Kms Flatness", 1e3), ("Kms90 Flatness", 2e4), ("Volume", 5e-6), ("Delta^2 from TargetStiffness", 3e-3)]
-NOPs.MaterialCoefficients = [3.065, -1.287] #C10, C01
-NOPs.MeshFine = 3
-NOPs.MeshCoarse = 8
-NOPs.N_Steps = 4
+NOPs.OptimizationWeights = [("Kms Flatness", 5e3), ("Kms90 Flatness", 1e5), ("Volume", 1e-6), ("Delta^2 from TargetStiffness", 5e-2)]
+NOPs.MaterialCoefficients = [3.065, -0.8] #C10, C01, C01 was -1.29 but that caused problems at high deformations so I made it smaller... I mean bigger.
+NOPs.MeshFine = 2
+NOPs.MeshCoarse = 5
+NOPs.N_Steps = 40
 NOPs.Node_find_tol = 1e-6
+NOPs.maxfev = 50
+NOPs.maxiter = 3
 
 Iter =0
 
 
 ##tidy up user inputs into lists/arrays
 bounds = [ConeSideThicknessRange, MiddleThicknessRange, EnclosureSideThicknessRange, 
-          EnclosureLaunchAngleRange, ConeLaunchAngleRange, SurroundDepthRange, SurroundApexOffsetRange]
+          EnclosureLaunchAngleRange, ConeLaunchAngleRange, SurroundDepthRange]
 
 #Initial guess
 x0 = np.array([ConeSideThicknessGuess, MiddleThicknessGuess, EnclosureSideThicknessGuess, 
-               EnclosureLaunchAngleGuess, ConeLaunchAngleGuess, SurroundDepthGuess, SurroundApexOffsetGuess])
+               EnclosureLaunchAngleGuess, ConeLaunchAngleGuess, SurroundDepthGuess])
 
 #global vars to track best solution if optimizer doesn't converge
 best_x = None
 best_score = float('inf')
 
 def objective(OptP, NOPs):
-    return 0 
+    
     global best_x, best_score
     try:
         global Iter 
     
         #params used to create surround geometry
         params = [("ConeSideThickness", OptP[0]), ("MiddleThickness", OptP[1]), ("EnclosureSideThickness", OptP[2]), 
-                ("EnclosureLaunchAngle", OptP[3]), ("ConeLaunchAngle", OptP[4]), ("SurroundDepth", OptP[5]), ("SurroundApexOffset", OptP[6]), 
+                ("EnclosureLaunchAngle", OptP[3]), ("ConeLaunchAngle", OptP[4]), ("SurroundDepth", OptP[5]), 
                 ("ConeWidth", NOPs.ConeWidth), ("MountingGap", NOPs.MountingGap), ("ConeEnclosureGap", NOPs.ConeEnclosureGap),
                 ("ConeHeight", NOPs.ConeHeight), ("ConeCornerRadius", NOPs.ConeCornerRadius), ("ConeOffset", NOPs.ConeOffset), 
                 ("MountFlangeThickness", NOPs.MountFlangeThickness)]
@@ -125,7 +128,7 @@ def objective(OptP, NOPs):
         print(f"Skipping invalid parameter set {OptP}, reason: {e}")
         traceback.print_exc()
         Iter += 1
-        return 1e6
+        return 1e9
     
     
     
@@ -133,7 +136,7 @@ def objective(OptP, NOPs):
 
 def FinishOut(OptP):
     params = [("ConeSideThickness", OptP[0]), ("MiddleThickness", OptP[1]), ("EnclosureSideThickness", OptP[2]), 
-                ("EnclosureLaunchAngle", OptP[3]), ("ConeLaunchAngle", OptP[4]), ("SurroundDepth", OptP[5]), ("SurroundApexOffset", OptP[6]), 
+                ("EnclosureLaunchAngle", OptP[3]), ("ConeLaunchAngle", OptP[4]), ("SurroundDepth", OptP[5]), 
                 ("ConeWidth", NOPs.ConeWidth), ("MountingGap", NOPs.MountingGap), ("ConeEnclosureGap", NOPs.ConeEnclosureGap),
                 ("ConeHeight", NOPs.ConeHeight), ("ConeCornerRadius", NOPs.ConeCornerRadius), ("ConeOffset", NOPs.ConeOffset)]
     
@@ -144,6 +147,10 @@ def FinishOut(OptP):
     return 0
 
 def main():
+
+    #Start a clock
+    Start_time = time.time()
+
     global best_x, best_score
 
     Result = minimize(objective, 
@@ -152,9 +159,9 @@ def main():
                       args = (NOPs,),
                       bounds=bounds,
                       options={
-                          "maxiter": 1,
-                          "maxfev": 1,
-                          "ftol": 0.75,
+                          "maxiter": NOPs.maxiter,
+                          "maxfev": NOPs.maxfev,
+                          "ftol": 0.5,
                           "disp": True}
                       )
 
@@ -182,6 +189,12 @@ def main():
         print('This is awkward. The best solution isnt working. try fixing it')
         traceback.print_exc()
         
+    Elapsed_time_min = (time.time() - Start_time)//60
+    Elapsed_hours = Elapsed_time_min//60
+    Elapsed_time_min_remainder = Elapsed_time_min%60
+
+
+    print("Optimisation time:", Elapsed_hours, "h ", Elapsed_time_min_remainder, "min")
     return 0 
 
 if __name__ == "__main__":

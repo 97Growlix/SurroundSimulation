@@ -8,10 +8,11 @@ from felupe.constitution.tensortrax.models.hyperelastic import mooney_rivlin
 from SurroundClasses import *
 
 
-def AnalyzeItBothWays(NOPs):
-    KmsOut, DispOut, field = AnalyzeItOneWay(NOPs)
 
-    KmsIn, DispIn, field = AnalyzeItOneWay(NOPs, fe_mesh_field=field)
+def AnalyzeItBothWays(NOPs):
+    KmsOut, DispOut = AnalyzeItOneWay(NOPs, 1)
+
+    KmsIn, DispIn = AnalyzeItOneWay(NOPs, -1)
     
     KmsOut = KmsOut[1:] #remove the first element bc it gets repeated
     DispOut = DispOut[1:] 
@@ -40,6 +41,15 @@ def CreateFeField(NOPs):
 
     gmsh.open(NOPs.stepout_path)
 
+    #get min z val
+    min_z = 100
+    for tag in gmsh.model.getEntities(3):
+        xmin, ymin, zmin, xmax, ymax, zmax = gmsh.model.getBoundingBox(3, tag[1])
+        if zmin < min_z:
+            min_z = zmin
+
+    print("zmin", min_z)
+
     Refinement_pt_a = [NOPs.ConeWidth/2 - NOPs.ConeCornerRadius, NOPs.ConeHeight/2- NOPs.ConeCornerRadius, NOPs.ConeOffset]
     #Refinement_pt_b = [NOPs.ConeWidth, NOPs.ConeHeight - NOPs.ConeCornerRadius, NOPs.ConeOffset]
 
@@ -53,10 +63,25 @@ def CreateFeField(NOPs):
     gmsh.model.mesh.field.setNumber(th_field, "InField", dist_field)
     gmsh.model.mesh.field.setNumber(th_field, "SizeMin", NOPs.MeshFine)
     gmsh.model.mesh.field.setNumber(th_field, "SizeMax", NOPs.MeshCoarse)
-    gmsh.model.mesh.field.setNumber(th_field, "DistMin", NOPs.ConeCornerRadius*1.1)
-    gmsh.model.mesh.field.setNumber(th_field, "DistMax", NOPs.ConeCornerRadius*2)
+    gmsh.model.mesh.field.setNumber(th_field, "DistMin", NOPs.ConeCornerRadius*0.9)
+    gmsh.model.mesh.field.setNumber(th_field, "DistMax", NOPs.ConeCornerRadius*1.2)
 
-    gmsh.model.mesh.field.setAsBackgroundMesh(th_field)
+    tip_field = gmsh.model.mesh.field.add("Box")
+    gmsh.model.mesh.field.setNumber(tip_field, "VIn", NOPs.MeshFine)
+    gmsh.model.mesh.field.setNumber(tip_field, "VOut", NOPs.MeshCoarse)
+    gmsh.model.mesh.field.setNumber(tip_field, "XMin", -1)
+    gmsh.model.mesh.field.setNumber(tip_field, "XMax", 1e11)
+    gmsh.model.mesh.field.setNumber(tip_field, "YMin", -1)
+    gmsh.model.mesh.field.setNumber(tip_field, "YMax", 1e11)
+    gmsh.model.mesh.field.setNumber(tip_field, "ZMin", -1e5)
+    gmsh.model.mesh.field.setNumber(tip_field, "ZMax", min_z+15)
+
+    #combine the two mesh mmodifier fields
+    min_field = gmsh.model.mesh.field.add("Min")
+    gmsh.model.mesh.field.setNumbers(min_field, "FieldsList", [th_field, tip_field])
+
+    
+    gmsh.model.mesh.field.setAsBackgroundMesh(min_field)
 
     gmsh.model.mesh.generate(3)
 
@@ -106,7 +131,7 @@ def CreateBCs(NOPs, field, points):
     #Inner Curved Surface
     Arc_Center_X = NOPs.ConeWidth/2 - NOPs.ConeCornerRadius
     Arc_Center_Y = NOPs.ConeHeight/2 - NOPs.ConeCornerRadius
-    Z_Height = NOPs.ConeOffset
+    Inner_Z_Height = NOPs.ConeOffset+NOPs.MountFlangeThickness
     tol = NOPs.Node_find_tol
 
     x_mod = points[:,0] - Arc_Center_X
@@ -118,23 +143,23 @@ def CreateBCs(NOPs, field, points):
     R_outer_for_inner = NOPs.ConeCornerRadius+tol
     R_inner_for_outer = NOPs.ConeCornerRadius+NOPs.ConeEnclosureGap
 
-    Inner_mask = (np.abs(z - Z_Height) <= tol) &\
+    Inner_mask = (np.abs(z - Inner_Z_Height) <= tol) &\
         (r<=R_outer_for_inner) &\
         (x_mod>=-tol) & (y_mod>=-tol)
     
     #InnerTop
-    Inner_top_mask = (np.abs(z - Z_Height) <= tol) &\
+    Inner_top_mask = (np.abs(z - Inner_Z_Height) <= tol) &\
         (x_mod <= tol) & (y_mod <= NOPs.ConeCornerRadius + tol)
 
     #InnerRight
-    Inner_right_mask = (np.abs(z - Z_Height) <= tol) &\
+    Inner_right_mask = (np.abs(z - Inner_Z_Height) <= tol) &\
         (y_mod <= tol) &\
         (x_mod <= NOPs.ConeCornerRadius + tol)
 
     #Outer anchored surface
 
-    Outer_anchored_mask = ((np.abs(z) <= tol)) &\
-        (((r>=R_inner_for_outer) & (x_mod >= -tol) & (y_mod >= -tol)) |\
+    Outer_anchored_mask = ((np.abs(z-NOPs.MountFlangeThickness) <= tol)) &\
+        (((r>=R_inner_for_outer) & (x_mod >= 0) & (y_mod >= 0)) |\
         ((y_mod>=NOPs.ConeCornerRadius + NOPs.ConeEnclosureGap) | (x_mod >= NOPs.ConeCornerRadius + NOPs.ConeEnclosureGap)))
 
 
@@ -192,6 +217,14 @@ def CreateBCs(NOPs, field, points):
 
     return bcs, masks
 
+#function for adding glyphs to show BCs
+def add_bc_nodes(plotter, nodes, color, grid, points):
+    nodes_cloud = pv.PolyData(points[nodes])
+    bbox = grid.bounds
+    radius = 0.003 * max(bbox[1]-bbox[0], bbox[3]-bbox[2], bbox[5]-bbox[4])
+    glyphs = nodes_cloud.glyph(scale=False, geom=pv.Sphere(radius=radius), orient = False)
+    plotter.add_mesh(glyphs, color=color)
+
 def ShowItOff(NOPs):
     import os
     import subprocess
@@ -200,43 +233,27 @@ def ShowItOff(NOPs):
     field, tetra_mesh, tetra_cells, points = CreateFeField(NOPs)
 
     bcs, masks = CreateBCs(NOPs, field, points)
-    #print("FElupe mesh ready:")
-    print("Number of points in mesh:", tetra_mesh.points.shape[0])
-    #print("Number of tetrahedra:", tetra_cells.shape[0])
-    #print("Quadrature:", tetra_mesh.quadrature)
 
-    #pyvista visualization
+    print("Number of points in mesh:", tetra_mesh.points.shape[0])
 
     # PyVista requires each cell to start with the number of points in the cell (4 for tetra)
     cells_pv = np.hstack([np.full((tetra_cells.shape[0], 1), 4), tetra_cells]).flatten()
 
     #format the data for pyvista
     grid = pv.UnstructuredGrid(cells_pv, np.full(tetra_cells.shape[0], 10), points)
-
-
+   
     pv_plotter = pv.Plotter()
     pv_plotter.add_mesh(grid, show_edges = True)
 
-    #function for adding glyphs to show BCs
-    def add_bc_nodes(plotter, nodes, color):
-        nodes_cloud = pv.PolyData(points[nodes])
-        # glyph spheres with radius 1% of bounding box size
-        bbox = grid.bounds
-        radius = 0.005 * max(bbox[1]-bbox[0], bbox[3]-bbox[2], bbox[5]-bbox[4])
-        glyphs = nodes_cloud.glyph(scale=False, geom=pv.Sphere(radius=radius), orient = False)
-        pv_plotter.add_mesh(glyphs, color=color)
-
-    add_bc_nodes(pv_plotter, bcs["symx"].points, 'red')
-    add_bc_nodes(pv_plotter, bcs["symy"].points, 'green')
-    add_bc_nodes(pv_plotter, bcs["ground"].points, 'blue')
-    add_bc_nodes(pv_plotter, bcs["move_z"].points, 'orange')
-
+    add_bc_nodes(pv_plotter, bcs["symx"].points, 'red', grid, points)
+    add_bc_nodes(pv_plotter, bcs["symy"].points, 'green', grid, points)
+    add_bc_nodes(pv_plotter, bcs["ground"].points, 'blue', grid, points)
+    add_bc_nodes(pv_plotter, bcs["move_z"].points, 'orange', grid, points)
 
     ##unconnemt this to show boundary conds
     pv_plotter.camera_position = [(-125.0,-125.0,-25),(50.0,75.0,7.0),(0.0,0.0,1.0)]
     
     pv_plotter.show()
-
 
     ###
     #material data
@@ -244,36 +261,30 @@ def ShowItOff(NOPs):
 
     material = fe.Hyperelastic(mooney_rivlin, C10 = NOPs.MaterialCoefficients[0], C01 = NOPs.MaterialCoefficients[1])
 
-
     # Define your solid body
-    solid = fe.SolidBody(material, field)
+    solid_out = fe.SolidBody(material, field)
+    
+    #Make separate bcs for each one
+    bcs_out = bcs
 
     # Define the displacement “ramp” (0 → some value) in linsteps
 
     steps_out = fe.math.linsteps([0,NOPs.Xmax], num=round(NOPs.N_Steps/2))
-    steps_in = fe.math.linsteps([0,-NOPs.Xmax], num=round(NOPs.N_Steps/2))
-
-
+ 
     # Define a step
     step_out = fe.Step(
-        items=[solid],
-        ramp={bcs["move_z"]: steps_out},
-        boundaries=bcs  # includes your fixed BCs + the “move_z” boundary
+        items=[solid_out],
+        ramp={bcs_out["move_z"]: steps_out},
+        boundaries=bcs_out  # includes your fixed BCs + the “move_z” boundary
     )
 
-    # Define a step
-    step_in = fe.Step(
-        items=[solid],
-        ramp={bcs["move_z"]: steps_in},
-        boundaries=bcs  # includes your fixed BCs + the “move_z” boundary
-    )
+   
 
     # Precompute PyVista cells
     cells_pv = np.hstack([np.full((tetra_cells.shape[0], 1), 4), tetra_cells]).flatten()
     cell_types = np.full(tetra_cells.shape[0], 10)  # 10 = VTK_TETRA
 
     original_pts = tetra_mesh.points.copy()
-
 
     deformed_meshes = []
 
@@ -298,20 +309,35 @@ def ShowItOff(NOPs):
 
 
     ### Create the CharacteristicCurve job
-    job_out = fe.CharacteristicCurve(steps=[step_out], boundary=bcs["move_z"], callback = cbout)
-    job_in = fe.CharacteristicCurve(steps=[step_in], boundary=bcs["move_z"], callback = cbin)
     
+    job_out = fe.CharacteristicCurve(steps=[step_out], boundary=bcs_out["move_z"], callback = cbout)
 
     # Evaluate the characteristic curve
     job_out.evaluate()
+    
+    #Now do the other way, but recompute the starting points first
+    field, tetra_mesh, tetra_cells, points = CreateFeField(NOPs)
+
+    bcs, masks = CreateBCs(NOPs, field, points)
+    solid_in = fe.SolidBody(material, field)
+    bcs_in = bcs
+    steps_in = fe.math.linsteps([0,-NOPs.Xmax], num=round(NOPs.N_Steps/2))
+     # Define a step
+    step_in = fe.Step(
+        items=[solid_in],
+        ramp={bcs_in["move_z"]: steps_in},
+        boundaries=bcs_in  # includes your fixed BCs + the “move_z” boundary
+    )
+    job_in = fe.CharacteristicCurve(steps=[step_in], boundary=bcs_in["move_z"], callback = cbin)
     job_in.evaluate()
+    
 
     ### For animation
     gif_path = "surround_mesh_animation.gif"
 
     # Create plotter window (visible)
     pl = pv.Plotter(window_size=(900, 700))
-    pl.camera_position = [(NOPs.ConeWidth/2,-125.0, 7.0),(NOPs.ConeWidth/2,0, 7.0),(0.0,0.0,1.0)]
+    pl.camera_position = [(NOPs.ConeWidth/2,-200.0, 7.0),(NOPs.ConeWidth/2,0, 7.0),(0.0,0.0,1.0)]
     pl.add_mesh(deformed_meshes[0], show_edges=True)
     pl.add_text("Mesh displacement animation", font_size=10)
     cpos = pl.camera_position
@@ -327,7 +353,7 @@ def ShowItOff(NOPs):
         frames.append(pl.screenshot(return_img=True))
 
     pl.close()
-    imageio.mimsave("surround_mesh_animation.gif", frames + frames[::-1], fps=4, loop = 0)
+    imageio.mimsave("surround_mesh_animation.gif", frames + frames[::-1], fps=round(NOPs.N_Steps/2), loop = 0)
     print("GIF saved:", gif_path)
 
     #open the gif automatically
@@ -392,7 +418,7 @@ def ShowItOff(NOPs):
 
     return 0 
 
-def AnalyzeItOneWay(NOPs, fe_mesh_field = None):
+def AnalyzeItOneWay(NOPs, Direction, fe_mesh_field = None):
    
     ###
     # Moony-Rivlin model params
@@ -423,7 +449,7 @@ def AnalyzeItOneWay(NOPs, fe_mesh_field = None):
     
     # Define the displacement “ramp” (0 → some value) in linsteps
 
-    steps = fe.math.linsteps([0,NOPs.Xmax], num=round(NOPs.N_Steps/2))
+    steps = fe.math.linsteps([0,NOPs.Xmax*Direction], num=round(NOPs.N_Steps/2))
     
     # Define a step
     step = fe.Step(
@@ -445,7 +471,7 @@ def AnalyzeItOneWay(NOPs, fe_mesh_field = None):
     # Compute stiffness
     kms = np.gradient(force, disp)
 
-    return kms, disp, fe_mesh_field
+    return kms, disp
 
 
 def main():

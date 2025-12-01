@@ -1,0 +1,15 @@
+direc : [[1. 0. 0. 0. 0. 0.]
+ [0. 1. 0. 0. 0. 0.]
+ [0. 0. 1. 0. 0. 0.]
+ [0. 0. 0. 1. 0. 0.]
+ [0. 0. 0. 0. 1. 0.]
+ [0. 0. 0. 0. 0. 1.]]
+fun : 152816.4595501625
+message : Maximum number of function evaluations has been exceeded.
+nfev : 50
+nit : 0
+status : 1
+success : False
+x : [ 2.63780128  2.06253706  2.5        96.5        95.8        39.75      ]
+Best tracked score: 135903.27441415007
+Best tracked params: [ 2.63780128  2.06253706  2.30306365 96.5        95.8        39.75      ]

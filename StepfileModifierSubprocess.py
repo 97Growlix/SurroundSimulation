@@ -17,7 +17,7 @@ if not os.path.exists(cadfile_path):
     raise FileNotFoundError(f"Input cad file path not found")
 
 doc = FreeCAD.openDocument(cadfile_path)
-print(f"Opened document: {cadfile_path}")
+#print(f"Opened document: {cadfile_path}")
 docname = os.path.splitext(os.path.basename(cadfile_path))[0]
 
 FreeCAD.setActiveDocument(docname)   
@@ -39,13 +39,13 @@ for cell in cell_names:
     if alias is not None: 
         for name, value in params:
             if name == alias:
-                print(f"replacing {ss.get(alias)} with {value} for {alias}")
+                #print(f"replacing {ss.get(alias)} with {value} for {alias}")
                 ss.set(cell, str(value))
 
 doc.recompute()
-print("Document recomputed")
-doc.save()
-print("document saved")
+#print("Document recomputed")
+#doc.save()
+#print("document saved")
 
 body = next((o for o in doc.Objects if o.TypeId == "PartDesign::Body"), None)
 if body is None:
@@ -55,7 +55,9 @@ if body is None:
 volume = body.Shape.Volume
 # Export
 Part.export([body], stepout_path)
-print(f"STEP file exported to: {stepout_path}")
+#print(f"STEP file exported to: {stepout_path}")
+
+FreeCAD.closeDocument(doc.Name)
 
 print("total volume:")
 print(4*volume)
