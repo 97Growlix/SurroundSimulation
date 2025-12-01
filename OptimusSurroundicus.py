@@ -145,6 +145,8 @@ def FinishOut(OptP):
                 ("ConeWidth", NOPs.ConeWidth), ("MountingGap", NOPs.MountingGap),
                 ("ConeHeight", NOPs.ConeHeight), ("ConeCornerRadius", NOPs.ConeCornerRadius), ("ConeOffset", NOPs.ConeOffset)]
     
+    NOPs.ConeEnclosureGap = OptP[6]  ## yes I know it's technically an optimized parameter and using this in this way isn't very easy to read. I'll fix it later :)
+
     Volume = ModEx(NOPs.cadfile_path, NOPs.stepout_path, params)
 
     ShowItOff(NOPs)
