@@ -1,3 +1,12 @@
+import os
+
+###Change these environment variables to allow multi-core solving 
+os.environ["OMP_NUM_THREADS"] = "16"
+os.environ["MKL_NUM_THREADS"] = "16"
+os.environ["OPENBLAS_NUM_THREADS"] = "16"
+os.environ["NUMEXPR_NUM_THREADS"] = "16"
+
+
 import numpy as np
 from felupe.constitution.tensortrax.models.hyperelastic import mooney_rivlin
 from AnalysisFuncs import *
@@ -51,9 +60,9 @@ NOPs.OptimizationWeights = [("Kms Flatness", 5e3), ("Kms90 Flatness", 1e5), ("Vo
 NOPs.MaterialCoefficients = [3.065, -0.8] #C10, C01, C01 was -1.29 but that caused problems at high deformations so I made it smaller... I mean bigger.
 NOPs.MeshFine = 2
 NOPs.MeshCoarse = 5
-NOPs.N_Steps = 40
+NOPs.N_Steps = 20
 NOPs.Node_find_tol = 1e-6
-NOPs.maxfev = 50
+NOPs.maxfev = 100
 NOPs.maxiter = 3
 
 Iter =0

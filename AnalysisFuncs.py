@@ -6,13 +6,20 @@ import pyvista as pv
 import matplotlib.pyplot as plt
 from felupe.constitution.tensortrax.models.hyperelastic import mooney_rivlin
 from SurroundClasses import *
-
+from multiprocessing import Pool
+from pypardiso import spsolve
 
 
 def AnalyzeItBothWays(NOPs):
-    KmsOut, DispOut = AnalyzeItOneWay(NOPs, 1)
+    
+    args = [(NOPs, 1),(NOPs,-1)] #represents forward and backward sweep
 
-    KmsIn, DispIn = AnalyzeItOneWay(NOPs, -1)
+    with Pool(processes=2) as pool:
+        OneWayResults = pool.starmap(AnalyzeItOneWay,args)    
+    
+    KmsOut, DispOut = OneWayResults[0]
+
+    KmsIn, DispIn = OneWayResults[1]
     
     KmsOut = KmsOut[1:] #remove the first element bc it gets repeated
     DispOut = DispOut[1:] 
@@ -419,7 +426,15 @@ def ShowItOff(NOPs):
     return 0 
 
 def AnalyzeItOneWay(NOPs, Direction, fe_mesh_field = None):
-   
+    #use this section for debugging parallelization
+    # import threading, multiprocessing, os, psutil
+
+    # p = psutil.Process(os.getpid())
+    # print(f"Process {os.getpid()} starting sweep {Direction}")
+    # print(f"Thread count (Python-level): {threading.active_count()}")
+    # print("Threads (OS-level):", p.num_threads())
+
+
     ###
     # Moony-Rivlin model params
     ###
@@ -457,12 +472,12 @@ def AnalyzeItOneWay(NOPs, Direction, fe_mesh_field = None):
         ramp={bcs["move_z"]: steps},
         boundaries=bcs  # includes your fixed BCs + the “move_z” boundary
     )
-
+    
     ### Create the CharacteristicCurve job
     job = fe.CharacteristicCurve(steps=[step], boundary=bcs["move_z"])
     # Evaluate the characteristic curve
 
-    job.evaluate()#filename=xdmf_filename)
+    job.evaluate(solver = spsolve)#filename=xdmf_filename)
 
     # Extract data useful for optimization
     disp = np.array([d[2] for d in job.x])      # Z displacement
