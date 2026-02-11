@@ -3,7 +3,7 @@ import os
 ###Change these environment variables to allow multi-core solving 
 os.environ["OMP_NUM_THREADS"] = "16"
 os.environ["MKL_NUM_THREADS"] = "16"
-os.environ["OPENBLAS_NUM_THREADS"] = "16"
+os.environ["OPENBLAS_NUM_THREADS"] = "16"  
 os.environ["NUMEXPR_NUM_THREADS"] = "16"
 
 
@@ -11,7 +11,7 @@ import numpy as np
 from felupe.constitution.tensortrax.models.hyperelastic import mooney_rivlin
 from AnalysisFuncs import *
 from RunSubprocess import ModEx
-from scipy.optimize import minimize
+from scipy.optimize import minimize, differential_evolution
 from SurroundClasses import *
 import traceback
 import time
@@ -31,14 +31,14 @@ SurroundApexOffsetRange = (-5, 5)  #Not using anymore
 ConeEnclosureGapRange = (30,50)
 
 #Initial guesses
-ConeSideThicknessGuess = 2.68
-MiddleThicknessGuess = 2.02
-EnclosureSideThicknessGuess = 2.50
-EnclosureLaunchAngleGuess = 96.5
-ConeLaunchAngleGuess = 95.8
-SurroundDepthGuess = 39.75
+ConeSideThicknessGuess = 2.96
+MiddleThicknessGuess = 2.03
+EnclosureSideThicknessGuess = 2.24
+EnclosureLaunchAngleGuess = 96.3
+ConeLaunchAngleGuess = 100.94
+SurroundDepthGuess = 47.15
 SurroundApexOffsetGuess = -0.2 #'Distance from centerline bw enclosure and cone towards cone
-ConeEnclosureGapGuess = 40
+ConeEnclosureGapGuess = 45.48
 
 #Non-optimization geometry parameters and such 
 NOPs = NonOptimParams()
@@ -57,13 +57,15 @@ NOPs.stepout_path = r"C:\Users\Gaming pc\Documents\GitHub\SurroundSimulation\Qua
 NOPs.Xmax = 45 #mm one way
 NOPs.TargetStiffness = 1 #N/mm
 NOPs.OptimizationWeights = [("Kms Flatness", 5e3), ("Kms90 Flatness", 1e5), ("Volume", 1e-6), ("Delta^2 from TargetStiffness", 5e-2)]
-NOPs.MaterialCoefficients = [3.065, -0.8] #C10, C01, C01 was -1.29 but that caused problems at high deformations so I made it smaller... I mean bigger.
+NOPs.MaterialCoefficients = [-0.388, 1.37] #C10, C01
 NOPs.MeshFine = 2
 NOPs.MeshCoarse = 5
 NOPs.N_Steps = 20
 NOPs.Node_find_tol = 1e-6
-NOPs.maxfev = 100
-NOPs.maxiter = 3
+NOPs.maxfev = 10000
+NOPs.maxiter = 300
+
+Algorithm = "Both" ##Options are "DE", "Powell", or "Both"
 
 Iter =0
 
@@ -79,9 +81,9 @@ x0 = np.array([ConeSideThicknessGuess, MiddleThicknessGuess, EnclosureSideThickn
 #global vars to track best solution if optimizer doesn't converge
 best_x = None
 best_score = float('inf')
-
+ 
 def objective(OptP, NOPs):
-    
+
     global best_x, best_score
     try:
         global Iter 
@@ -162,6 +164,10 @@ def FinishOut(OptP):
 
     return 0
 
+def PointlessCB(j):
+    print("this is pointless")
+
+
 def main():
 
     #Start a clock
@@ -169,17 +175,57 @@ def main():
 
     global best_x, best_score
 
-    Result = minimize(objective, 
-                      x0, 
-                      method='powell', 
-                      args = (NOPs,),
-                      bounds=bounds,
-                      options={
-                          "maxiter": NOPs.maxiter,
-                          "maxfev": NOPs.maxfev,
-                          "ftol": 0.5,
-                          "disp": True}
-                      )
+    if Algorithm =="Powell":
+        Result = minimize(objective, 
+                        x0, 
+                        method="Powell", 
+                        args = (NOPs,),
+                        bounds=bounds,
+                        options={
+                            "maxiter": NOPs.maxiter,
+                            "maxfev": NOPs.maxfev,
+                            "ftol": 0.5,
+                            "disp": True}
+                        )
+    elif Algorithm == "DE":
+        Result = differential_evolution(objective, 
+                                        bounds = bounds,
+                                        args = (NOPs,),
+                                        strategy='best1bin',
+                                        maxiter= NOPs.maxiter,
+                                        tol = 0.5,
+                                        recombination = 0.7,
+                                        polish = False, 
+                                        popsize = 20)
+    elif Algorithm == "Both":
+        Search = differential_evolution(objective, 
+                                        bounds = bounds,
+                                        args = (NOPs,),
+                                        strategy='best1bin',
+                                        maxiter= NOPs.maxiter,
+                                        tol = 0.5,
+                                        recombination = 0.7,
+                                        polish = False, 
+                                        popsize = 20,
+                                        disp= True
+                                        )
+        
+        x0 = best_x
+ 
+        Result = minimize(objective, 
+                        x0, 
+                        method="Powell", 
+                        args = (NOPs,),
+                        bounds=bounds,
+                        callback = PointlessCB,
+                        options={
+                            "maxiter": NOPs.maxiter,
+                            "maxfev": NOPs.maxfev,
+                            "ftol": 0.5,
+                            "disp": True}
+                        )
+    else:
+        print("Invalid algorithm choice. Please choose DE or Powell")
 
     print("Final Result:")
     print(Result)
