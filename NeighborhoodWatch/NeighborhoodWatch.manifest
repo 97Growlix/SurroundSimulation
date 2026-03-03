@@ -1,6 +1,6 @@
 {
 	"autodeskProduct":	"Fusion",
-	"type":	"script",
+	"type":	"addin",
 	"author":	"",
 	"description":	{
 		"":	""
