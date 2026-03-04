@@ -31,7 +31,8 @@ def run(context):
         except:
             log("couldn't delete trigfile")
 
-        params = json.loads(payload)
+        data = json.loads(payload)
+        params = data["parameters"]
         log(f"Params received {params}")
 
     except Exception:
@@ -52,20 +53,20 @@ def run(context):
             return
         
         log(f"found it")
-        doc = app.documents.open(target_file)
+        doc = app.documents.open(target_file, False)
 
         if not doc:
             log("Err, couldn't open it")
             return
         log("Doc opened successfully")
         
-        design = adsk.fusion.Design.cast(app.activeProduct)
+        design = adsk.fusion.Design.cast(doc.products.itemByProductType("DesignProductType"))
         UserParams = design.userParameters
 
         for name, value in params.items():
             param = UserParams.itemByName(name)
             if param:
-                param.expresssion = str(value)
+                param.expression = str(value)
                 log(f"set {name} = {value}")
             else:
                 log(f"Warning, parameter '{name}'not found in design")

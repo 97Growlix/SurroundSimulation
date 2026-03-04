@@ -19,5 +19,6 @@ class NonOptimParams:
         self.MountFlangeThickness = None
         self.maxfev = None
         self.maxiter = None
+        self.TriggerPath = None
         
     pass

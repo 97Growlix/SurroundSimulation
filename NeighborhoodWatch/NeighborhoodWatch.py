@@ -32,7 +32,7 @@ def poll_loop():
                 log("Stop event detected — exiting poll loop")
                 break
 
-            log("Polling iteration")
+            #log("Polling iteration")
 
             if not BusyFlag and os.path.exists(TrigFile):
                 log("Trigger file detected")
@@ -47,7 +47,7 @@ def poll_loop():
         except Exception:
             log("Poll loop crash:\n" + traceback.format_exc())
 
-        log("Sleeping...")
+        #log("Sleeping...")
         _stop_event.wait(PollInterval)
     
 CustEventID = "NeighborhoodWatch_RunScript"

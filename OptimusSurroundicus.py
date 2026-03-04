@@ -1,4 +1,5 @@
 import os
+import json
 
 ###Change these environment variables to allow multi-core solving 
 os.environ["OMP_NUM_THREADS"] = "16"
@@ -52,7 +53,7 @@ NOPs.MountFlangeThickness = 2
 
 
 #Other things
-NOPs.cadfile_path = r"C:\Users\Gaming pc\Documents\GitHub\SurroundSimulation\SurroundQuarter.FCStd"
+NOPs.TriggerPath = r"C:\Users\Gaming pc\Documents\GitHub\SurroundSimulation\NeighborhoodWatch\run.trigger"
 NOPs.stepout_path = r"C:\Users\Gaming pc\Documents\GitHub\SurroundSimulation\QuarterSurround.step"
 NOPs.Xmax = 45 #mm one way
 NOPs.TargetStiffness = 1 #N/mm
@@ -167,6 +168,15 @@ def FinishOut(OptP):
 def PointlessCB(j):
     print("this is pointless")
 
+def CreateTrigger(Parameters):
+    global NOPs
+
+    data = {
+        "parameters": dict({Parameters})
+    }
+
+    NOPs.TriggerPath.write_text(json.dumps(data, indent=4))
+    
 
 def main():
 
