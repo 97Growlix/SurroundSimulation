@@ -1,5 +1,7 @@
 import os
 import json
+import ast
+
 
 ###Change these environment variables to allow multi-core solving 
 os.environ["OMP_NUM_THREADS"] = "16"
@@ -11,11 +13,19 @@ os.environ["NUMEXPR_NUM_THREADS"] = "16"
 import numpy as np
 from felupe.constitution.tensortrax.models.hyperelastic import mooney_rivlin
 from AnalysisFuncs import *
-from RunSubprocess import ModEx
+#from RunSubprocess import ModEx
 from scipy.optimize import minimize, differential_evolution
 from SurroundClasses import *
 import traceback
 import time
+import psutil
+import subprocess
+#import sys
+from pathlib import Path
+import cadquery as cq
+
+
+
 
 ###
 #define user things
@@ -23,23 +33,30 @@ import time
 
 #Optimization CAD parameter ranges
 ConeSideThicknessRange = (1.5, 4)
-MiddleThicknessRange = (1.5, 4)
+MiddleThicknessRange = (0.8, 4)
 EnclosureSideThicknessRange = (1.5,4)
 EnclosureLaunchAngleRange = (85, 102)
 ConeLaunchAngleRange = (85, 102)
-SurroundDepthRange = (25, 50)
-SurroundApexOffsetRange = (-5, 5)  #Not using anymore
+#SurroundDepthRange = (25, 50)
+ControlSplineDepthRange = (40,80)
+#SurroundApexOffsetRange = (-5, 5)  #Not using anymore
 ConeEnclosureGapRange = (30,50)
+#ApexSplineWeightRange = (4,8)
+#ConeSplineWeightRange = (15,25)
+
 
 #Initial guesses
-ConeSideThicknessGuess = 2.96
-MiddleThicknessGuess = 2.03
-EnclosureSideThicknessGuess = 2.24
-EnclosureLaunchAngleGuess = 96.3
-ConeLaunchAngleGuess = 100.94
-SurroundDepthGuess = 47.15
-SurroundApexOffsetGuess = -0.2 #'Distance from centerline bw enclosure and cone towards cone
-ConeEnclosureGapGuess = 45.48
+ConeSideThicknessGuess = 3
+MiddleThicknessGuess = 2
+EnclosureSideThicknessGuess = 2
+EnclosureLaunchAngleGuess = 96.5
+ConeLaunchAngleGuess = 89.15
+#SurroundDepthGuess = 47.15
+ControlSplineDepthGuess = 59.4
+#SurroundApexOffsetGuess = -0.2 #'Distance from centerline bw enclosure and cone towards cone
+ConeEnclosureGapGuess = 47.96
+#ApexSplineWeightGuess = 6
+#ConeSplineWeightGuess = 20
 
 #Non-optimization geometry parameters and such 
 NOPs = NonOptimParams()
@@ -47,62 +64,72 @@ NOPs = NonOptimParams()
 NOPs.ConeWidth =732.8
 NOPs.ConeHeight = 1052.6
 NOPs.ConeCornerRadius = 199
-NOPs.ConeOffset = -1  #'Distance the cone protrudes outward from enclosure
+NOPs.ConeOffset = -1  #'Distance the cone mounting face protrudes outward from enclosure mounting face
 NOPs.MountingGap = 0.5
 NOPs.MountFlangeThickness = 2
 
 
 #Other things
-NOPs.TriggerPath = r"C:\Users\Gaming pc\Documents\GitHub\SurroundSimulation\NeighborhoodWatch\run.trigger"
-NOPs.stepout_path = r"C:\Users\Gaming pc\Documents\GitHub\SurroundSimulation\QuarterSurround.step"
+NOPs.TriggerPath = Path(r"C:\Users\Gaming pc\Documents\GitHub\SurroundSimulation\NeighborhoodWatch\run.trigger")
+NOPs.stepout_path = r"C:\Users\Gaming pc\Documents\GitHub\SurroundSimulation\SurroundMutation.step"
 NOPs.Xmax = 45 #mm one way
 NOPs.TargetStiffness = 1 #N/mm
 NOPs.OptimizationWeights = [("Kms Flatness", 5e3), ("Kms90 Flatness", 1e5), ("Volume", 1e-6), ("Delta^2 from TargetStiffness", 5e-2)]
-NOPs.MaterialCoefficients = [-0.388, 1.37] #C10, C01
+NOPs.MaterialCoefficients = [0.513, 0.1404] #C10, C01 these were obtained from state-of-the-art sketchy tensile tests and curve fitting
 NOPs.MeshFine = 2
 NOPs.MeshCoarse = 5
 NOPs.N_Steps = 20
-NOPs.Node_find_tol = 1e-6
-NOPs.maxfev = 10000
-NOPs.maxiter = 300
+NOPs.Node_find_tol = 1e-2
+NOPs.maxfevPow = 700
+NOPs.maxiterPow = 200
+NOPs.popsizeDE = 30
+NOPs.maxfevDE = 650
+FusionExe = os.path.expandvars(r"C:\Users\%USERNAME%\AppData\Local\Autodesk\webdeploy\production\10477bbe50cc169c7bd2cee9059bc7c9d0b71ec0\Fusion360.exe")
+TrackingFile = Path(__file__).parent / "TrackedBests.txt"
 
-Algorithm = "Both" ##Options are "DE", "Powell", or "Both"
+Algorithm = "Powell" ##Options are "DE", "Powell", or "Both"
+Resuming = True  ##If true, then take the best x from the trackedbests file and start from there
 
 Iter =0
 
 
 ##tidy up user inputs into lists/arrays
 bounds = [ConeSideThicknessRange, MiddleThicknessRange, EnclosureSideThicknessRange, 
-          EnclosureLaunchAngleRange, ConeLaunchAngleRange, SurroundDepthRange, ConeEnclosureGapRange]
+          EnclosureLaunchAngleRange, ConeLaunchAngleRange, ControlSplineDepthRange, ConeEnclosureGapRange]
 
+print(NOPs.maxfevDE//(NOPs.popsizeDE*len(bounds) - 1))
 #Initial guess
 x0 = np.array([ConeSideThicknessGuess, MiddleThicknessGuess, EnclosureSideThicknessGuess, 
-               EnclosureLaunchAngleGuess, ConeLaunchAngleGuess, SurroundDepthGuess, ConeEnclosureGapGuess])
+               EnclosureLaunchAngleGuess, ConeLaunchAngleGuess, ControlSplineDepthGuess, ConeEnclosureGapGuess])
 
 #global vars to track best solution if optimizer doesn't converge
 best_x = None
 best_score = float('inf')
  
 def objective(OptP, NOPs):
-
+    return 0
     global best_x, best_score
     try:
         global Iter 
     
         #params used to create surround geometry
         params = [("ConeSideThickness", OptP[0]), ("MiddleThickness", OptP[1]), ("EnclosureSideThickness", OptP[2]), 
-                ("EnclosureLaunchAngle", OptP[3]), ("ConeLaunchAngle", OptP[4]), ("SurroundDepth", OptP[5]), ("ConeEnclosureGap", OptP[6]),
+                ("EnclosureLaunchAngle", OptP[3]), ("ConeLaunchAngle", OptP[4]), ("ControlSplineDepth", OptP[5]), ("ConeEnclosureGap", OptP[6]),
                 ("ConeWidth", NOPs.ConeWidth), ("MountingGap", NOPs.MountingGap),
                 ("ConeHeight", NOPs.ConeHeight), ("ConeCornerRadius", NOPs.ConeCornerRadius), ("ConeOffset", NOPs.ConeOffset), 
                 ("MountFlangeThickness", NOPs.MountFlangeThickness)]
         
         NOPs.ConeEnclosureGap = OptP[6]  ## yes I know it's technically an optimized parameter and using this in this way isn't very easy to read. I'll fix it later :)
 
-        print(params[0:6])
-       
+        print(params[0:7])
+        
         #This modifies the cad file and exports as a step
-        Volume = ModEx(NOPs.cadfile_path, NOPs.stepout_path, params)
-      
+       
+        CreateTrigger(params)  ##This creates a trigger file, which tells fusion to open the surround file and make changes according to what's in the trigger file, then export
+        WaitOnFusion()
+        
+        Volume = CalcVolume(NOPs.stepout_path)
+        print("Volume=", Volume)
         #to find the fitness score of the surround
         Kms, Disp = AnalyzeItBothWays(NOPs) 
         print('a')
@@ -133,7 +160,13 @@ def objective(OptP, NOPs):
         if SurroundScore < best_score:
             best_score = SurroundScore
             best_x = OptP.copy()
+            # print("Tracking filepath")
+            # print(TrackingFile)
 
+            with open(TrackingFile, 'a') as f:
+                f.write(f"score: {best_score}\n")
+                f.write(f"params: {best_x.tolist()}\n")
+             
         print('Current score:')
         print(SurroundScore)
         print('Breakdown')
@@ -159,8 +192,9 @@ def FinishOut(OptP):
     
     NOPs.ConeEnclosureGap = OptP[6]  ## yes I know it's technically an optimized parameter and using this in this way isn't very easy to read. I'll fix it later :)
 
-    Volume = ModEx(NOPs.cadfile_path, NOPs.stepout_path, params)
-
+    CreateTrigger(params)
+    WaitOnFusion()
+    
     ShowItOff(NOPs)
 
     return 0
@@ -169,22 +203,70 @@ def PointlessCB(j):
     print("this is pointless")
 
 def CreateTrigger(Parameters):
-    global NOPs
+    ##Creates the trigger file that will tell fusion what to build. Also deletes the old step file for timing purposes
+    StepFile = Path(NOPs.stepout_path)
+    
+    if StepFile.exists():  ##delete if present
+        StepFile.unlink()
+
+    Parameters = [(name, float(val)) for name, val in Parameters]
+
+    if not fusion_running():
+        subprocess.Popen([FusionExe])
+        print("opening fusion360. wait 10 sec before continuing")
+        time.sleep(10)
 
     data = {
-        "parameters": dict({Parameters})
+        "parameters": dict(Parameters)
     }
 
     NOPs.TriggerPath.write_text(json.dumps(data, indent=4))
+
+    return None
+
+def fusion_running():
+    for proc in psutil.process_iter(['name']):
+        if proc.info['name'] and 'Fusion360' in proc.info['name']: 
+            return True
+    return False
+
+def WaitOnFusion(timeout = 100, poll=1):
+    start = time.time()
+    WatchFile = Path(NOPs.stepout_path)
     
+    while not WatchFile.exists():
+        if time.time() -start > timeout:
+            raise TimeoutError("Fusion took too long")
+        time.sleep(poll)
+
+def CalcVolume(StepPath):
+    shape = cq.importers.importStep(str(StepPath))
+    volume = shape.val().Volume()
+
+    return volume
 
 def main():
+    global best_x, best_score, x0
+    if Resuming == True:
+        with open(TrackingFile) as f:
+            lines = f.readlines()
+        try:
+            last_params_line = [l for l in lines if l.startswith("params:")][-1]
+        
+            last_params = np.array(ast.literal_eval(last_params_line.split("params:")[1].strip()))
 
+            print('resuming from last time')
+            print(last_params)
+            x0 = last_params
+        except:
+            print("no params found")
+        
+    else: 
+        open("TrackedBests.txt", "w").close() #clear the file
     #Start a clock
     Start_time = time.time()
 
-    global best_x, best_score
-
+    
     if Algorithm =="Powell":
         Result = minimize(objective, 
                         x0, 
@@ -192,8 +274,8 @@ def main():
                         args = (NOPs,),
                         bounds=bounds,
                         options={
-                            "maxiter": NOPs.maxiter,
-                            "maxfev": NOPs.maxfev,
+                            #"maxiter": NOPs.maxiterPow,
+                            "maxfev": NOPs.maxfevPow,
                             "ftol": 0.5,
                             "disp": True}
                         )
@@ -202,7 +284,7 @@ def main():
                                         bounds = bounds,
                                         args = (NOPs,),
                                         strategy='best1bin',
-                                        maxiter= NOPs.maxiter,
+                                        maxiter= NOPs.maxfevDE//(NOPs.popsizeDE*len(bounds) - 1),
                                         tol = 0.5,
                                         recombination = 0.7,
                                         polish = False, 
@@ -212,25 +294,24 @@ def main():
                                         bounds = bounds,
                                         args = (NOPs,),
                                         strategy='best1bin',
-                                        maxiter= NOPs.maxiter,
+                                        maxiter= NOPs.maxfevDE//(NOPs.popsizeDE*len(bounds) - 1),
                                         tol = 0.5,
                                         recombination = 0.7,
                                         polish = False, 
-                                        popsize = 20,
+                                        popsize = 10,
                                         disp= True
                                         )
         
-        x0 = best_x
- 
+         
         Result = minimize(objective, 
-                        x0, 
+                        best_x, 
                         method="Powell", 
                         args = (NOPs,),
                         bounds=bounds,
-                        callback = PointlessCB,
+                        #callback = PointlessCB,
                         options={
-                            "maxiter": NOPs.maxiter,
-                            "maxfev": NOPs.maxfev,
+                            #"maxiter": NOPs.maxiterPow,
+                            "maxfev": NOPs.maxfevPow,
                             "ftol": 0.5,
                             "disp": True}
                         )
@@ -256,7 +337,8 @@ def main():
     
     ### Show it off
     try:
-        FinishOut(Result.x)
+        #FinishOut(Result.x)
+        FinishOut(x0) #for debugging
     except Exception as e:
         print('This is awkward. The best solution isnt working. try fixing it')
         traceback.print_exc()

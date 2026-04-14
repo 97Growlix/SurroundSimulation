@@ -17,8 +17,11 @@ class NonOptimParams:
         self.MeshCoarse = None
         self.N_Steps = None
         self.MountFlangeThickness = None
-        self.maxfev = None
-        self.maxiter = None
+        self.maxfevPow = None
+        self.maxiterPow = None
         self.TriggerPath = None
+        self.maxfevDE = None
+        self.popsizeDE = None
+        self.maxiterDE = None
         
     pass

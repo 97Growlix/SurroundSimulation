@@ -45,11 +45,11 @@ def CreateFeField(NOPs):
 
     gmsh.initialize()
     gmsh.option.setNumber("General.Verbosity", 1)
-
+    
     gmsh.open(NOPs.stepout_path)
 
     #get min z val
-    min_z = 100
+    min_z = float("inf")
     for tag in gmsh.model.getEntities(3):
         xmin, ymin, zmin, xmax, ymax, zmax = gmsh.model.getBoundingBox(3, tag[1])
         if zmin < min_z:
@@ -58,12 +58,13 @@ def CreateFeField(NOPs):
     print("zmin", min_z)
 
     Refinement_pt_a = [NOPs.ConeWidth/2 - NOPs.ConeCornerRadius, NOPs.ConeHeight/2- NOPs.ConeCornerRadius, NOPs.ConeOffset]
+    print("ref pt", Refinement_pt_a)
     #Refinement_pt_b = [NOPs.ConeWidth, NOPs.ConeHeight - NOPs.ConeCornerRadius, NOPs.ConeOffset]
 
     dist_field = gmsh.model.mesh.field.add("Distance")
 
-    pt_tag = gmsh.model.geo.addPoint(*Refinement_pt_a, 0)
-    gmsh.model.geo.synchronize()
+    pt_tag = gmsh.model.occ.addPoint(*Refinement_pt_a, 0)
+    gmsh.model.occ.synchronize()
     gmsh.model.mesh.field.setNumbers(dist_field, "NodesList", [pt_tag])
 
     th_field = gmsh.model.mesh.field.add("Threshold")
@@ -76,21 +77,35 @@ def CreateFeField(NOPs):
     tip_field = gmsh.model.mesh.field.add("Box")
     gmsh.model.mesh.field.setNumber(tip_field, "VIn", NOPs.MeshFine)
     gmsh.model.mesh.field.setNumber(tip_field, "VOut", NOPs.MeshCoarse)
-    gmsh.model.mesh.field.setNumber(tip_field, "XMin", -1)
-    gmsh.model.mesh.field.setNumber(tip_field, "XMax", 1e11)
-    gmsh.model.mesh.field.setNumber(tip_field, "YMin", -1)
-    gmsh.model.mesh.field.setNumber(tip_field, "YMax", 1e11)
-    gmsh.model.mesh.field.setNumber(tip_field, "ZMin", -1e5)
+    gmsh.model.mesh.field.setNumber(tip_field, "XMin", xmin-1)
+    gmsh.model.mesh.field.setNumber(tip_field, "XMax", xmax+1)
+    gmsh.model.mesh.field.setNumber(tip_field, "YMin", ymin-1)
+    gmsh.model.mesh.field.setNumber(tip_field, "YMax", ymax+1)
+    gmsh.model.mesh.field.setNumber(tip_field, "ZMin", zmin-1)
     gmsh.model.mesh.field.setNumber(tip_field, "ZMax", min_z+15)
+    gmsh.model.mesh.field.setNumber(tip_field, "Thickness", 15)
 
     #combine the two mesh mmodifier fields
     min_field = gmsh.model.mesh.field.add("Min")
     gmsh.model.mesh.field.setNumbers(min_field, "FieldsList", [th_field, tip_field])
-
-    
+    # gmsh.option.setNumber("Mesh.CharacteristicLengthFromPoints", 0)
+    # gmsh.option.setNumber("Mesh.CharacteristicLengthFromCurvature", 0)
+    # gmsh.option.setNumber("Mesh.CharacteristicLengthExtendFromBoundary", 0) 
+        
     gmsh.model.mesh.field.setAsBackgroundMesh(min_field)
-
+    print(gmsh.__version__)
     gmsh.model.mesh.generate(3)
+
+    print("MeshFine:", NOPs.MeshFine)
+    print("MeshCoarse:", NOPs.MeshCoarse)
+    print("ZMin box:", zmin-1, "ZMax box:", zmin+15)
+    print("Full Z range:", zmin, "to", zmax)
+    print("Refinement pt:", Refinement_pt_a)
+    print("tip_field id:", tip_field)
+    print("min_field id:", min_field)
+
+    for tag in gmsh.model.getEntities(3):
+        print(gmsh.model.getBoundingBox(3, tag[1]))
 
     gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)  # version 2.2
     gmsh.option.setNumber("Mesh.Binary", 0)            # ASCII, not binary
@@ -138,7 +153,8 @@ def CreateBCs(NOPs, field, points):
     #Inner Curved Surface
     Arc_Center_X = NOPs.ConeWidth/2 - NOPs.ConeCornerRadius
     Arc_Center_Y = NOPs.ConeHeight/2 - NOPs.ConeCornerRadius
-    Inner_Z_Height = NOPs.ConeOffset+NOPs.MountFlangeThickness
+    Cone_Z_Height = NOPs.MountFlangeThickness - 5 #add the -5 for analyzing the IA surround
+    Enclosure_Z_Height = Cone_Z_Height - NOPs.ConeOffset - NOPs.MountFlangeThickness
     tol = NOPs.Node_find_tol
 
     x_mod = points[:,0] - Arc_Center_X
@@ -150,24 +166,24 @@ def CreateBCs(NOPs, field, points):
     R_outer_for_inner = NOPs.ConeCornerRadius+tol
     R_inner_for_outer = NOPs.ConeCornerRadius+NOPs.ConeEnclosureGap
 
-    Inner_mask = (np.abs(z - Inner_Z_Height) <= tol) &\
+    Cone_Corner_Mask = (np.abs(z - Cone_Z_Height) <= tol) &\
         (r<=R_outer_for_inner) &\
         (x_mod>=-tol) & (y_mod>=-tol)
     
     #InnerTop
-    Inner_top_mask = (np.abs(z - Inner_Z_Height) <= tol) &\
+    Cone_Top_Edge_Mask = (np.abs(z - Cone_Z_Height) <= tol) &\
         (x_mod <= tol) & (y_mod <= NOPs.ConeCornerRadius + tol)
 
     #InnerRight
-    Inner_right_mask = (np.abs(z - Inner_Z_Height) <= tol) &\
+    Cone_Right_Edge_Mask = (np.abs(z - Cone_Z_Height) <= tol) &\
         (y_mod <= tol) &\
         (x_mod <= NOPs.ConeCornerRadius + tol)
 
     #Outer anchored surface
 
-    Outer_anchored_mask = ((np.abs(z-NOPs.MountFlangeThickness) <= tol)) &\
+    Enclosure_Mounting_Mask = ((np.abs(z-Enclosure_Z_Height) <= tol)) &\
         (((r>=R_inner_for_outer) & (x_mod >= 0) & (y_mod >= 0)) |\
-        ((y_mod>=NOPs.ConeCornerRadius + NOPs.ConeEnclosureGap) | (x_mod >= NOPs.ConeCornerRadius + NOPs.ConeEnclosureGap)))
+        ((y_mod>=R_inner_for_outer) | (x_mod >= R_inner_for_outer)))
 
 
 
@@ -192,18 +208,18 @@ def CreateBCs(NOPs, field, points):
     # Fixed support at z=0, fix all components
     bc_bottom = fe.Boundary(
         field[0],
-        mask = Outer_anchored_mask,             # select points where z ≈ 0
+        mask = Enclosure_Mounting_Mask,             # select points where z ≈ 0
         skip = (False, False, False)
     )
     #Create BC for applying displacements later
     move_z = fe.Boundary(
         field[0],
-        mask = (Inner_mask | Inner_top_mask | Inner_right_mask),            # selects all nodes from the earlier mask
+        mask = (Cone_Corner_Mask | Cone_Top_Edge_Mask | Cone_Right_Edge_Mask),            # selects all nodes from the earlier mask
         skip=(True, True, False) # constrain only Z (doesn't actually matter I think)
     )
     bc_cone = fe.Boundary(
         field[0],
-        mask = (Inner_mask | Inner_top_mask | Inner_right_mask),            # selects all nodes from the earlier mask
+        mask = (Cone_Corner_Mask | Cone_Top_Edge_Mask | Cone_Right_Edge_Mask),            # selects all nodes from the earlier mask
         skip=(False, False, True) # constrain only Z (doesn't actually matter I think)
     )
 
@@ -216,10 +232,10 @@ def CreateBCs(NOPs, field, points):
     bcs["bc_cone"] = bc_cone
 
     masks = dict()
-    masks["InnerMask"] = Inner_mask
-    masks["InnerTop"] = Inner_top_mask
-    masks["InnerRight"] = Inner_right_mask
-    masks["Outer"] = Outer_anchored_mask
+    masks["InnerMask"] = Cone_Corner_Mask
+    masks["InnerTop"] = Cone_Top_Edge_Mask
+    masks["InnerRight"] = Cone_Right_Edge_Mask
+    masks["Outer"] = Enclosure_Mounting_Mask
 
 
     return bcs, masks

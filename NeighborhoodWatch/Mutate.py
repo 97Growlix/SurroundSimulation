@@ -74,8 +74,10 @@ def run(context):
         os.makedirs(OutputDir, exist_ok=True)
         OutputPath = os.path.join(OutputDir, OutputName)
 
+
         em = adsk.fusion.ExportManager.cast(adsk.fusion.Design.cast(doc.products.itemByProductType("DesignProductType")).exportManager
         )
+
 
         step_options = em.createSTEPExportOptions(OutputPath)
         success = em.execute(step_options)
