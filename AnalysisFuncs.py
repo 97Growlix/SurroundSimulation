@@ -153,8 +153,9 @@ def CreateBCs(NOPs, field, points):
     #Inner Curved Surface
     Arc_Center_X = NOPs.ConeWidth/2 - NOPs.ConeCornerRadius
     Arc_Center_Y = NOPs.ConeHeight/2 - NOPs.ConeCornerRadius
-    Cone_Z_Height = NOPs.MountFlangeThickness - 5 #add the -5 for analyzing the IA surround
-    Enclosure_Z_Height = Cone_Z_Height - NOPs.ConeOffset - NOPs.MountFlangeThickness
+    Cone_Z_Height = NOPs.MountFlangeThickness #- 5 #add the -5 for analyzing the IA surround 
+    Enclosure_Z_Height = Cone_Z_Height - NOPs.ConeOffset 
+    Clamp_Z_Height = Enclosure_Z_Height + NOPs.MountFlangeThickness
     tol = NOPs.Node_find_tol
 
     x_mod = points[:,0] - Arc_Center_X
@@ -165,6 +166,7 @@ def CreateBCs(NOPs, field, points):
 
     R_outer_for_inner = NOPs.ConeCornerRadius+tol
     R_inner_for_outer = NOPs.ConeCornerRadius+NOPs.ConeEnclosureGap
+    
 
     Cone_Corner_Mask = (np.abs(z - Cone_Z_Height) <= tol) &\
         (r<=R_outer_for_inner) &\
@@ -185,7 +187,9 @@ def CreateBCs(NOPs, field, points):
         (((r>=R_inner_for_outer) & (x_mod >= 0) & (y_mod >= 0)) |\
         ((y_mod>=R_inner_for_outer) | (x_mod >= R_inner_for_outer)))
 
-
+    Enclosure_Clamp_Mask = ((np.abs(z-Clamp_Z_Height) <= tol)) &\
+        (((r>=(R_inner_for_outer-NOPs.ConeEnclosureGap/2)) & (x_mod >= 0) & (y_mod >= 0)) |\
+        ((y_mod>=(R_inner_for_outer-NOPs.ConeEnclosureGap/2)) | (x_mod >= (R_inner_for_outer-NOPs.ConeEnclosureGap/2))))
 
     ###
     #boundary cond
@@ -208,7 +212,7 @@ def CreateBCs(NOPs, field, points):
     # Fixed support at z=0, fix all components
     bc_bottom = fe.Boundary(
         field[0],
-        mask = Enclosure_Mounting_Mask,             # select points where z ≈ 0
+        mask = Enclosure_Mounting_Mask,             # select points where enclosure mount is
         skip = (False, False, False)
     )
     #Create BC for applying displacements later
@@ -222,6 +226,10 @@ def CreateBCs(NOPs, field, points):
         mask = (Cone_Corner_Mask | Cone_Top_Edge_Mask | Cone_Right_Edge_Mask),            # selects all nodes from the earlier mask
         skip=(False, False, True) # constrain only Z (doesn't actually matter I think)
     )
+    clamp_data = {
+        "mask": Enclosure_Clamp_Mask,
+        "z_clamp": Clamp_Z_Height
+    }    
 
     #group all the bcs together
     bcs = dict()
@@ -238,7 +246,25 @@ def CreateBCs(NOPs, field, points):
     masks["Outer"] = Enclosure_Mounting_Mask
 
 
-    return bcs, masks
+    return bcs, masks, clamp_data
+
+def clamp_spring_force(x, points, clamp_data, k):
+    u = x[0].values  # (num_nodes, 3)
+
+    z_current = points[:, 2] + u[:, 2]
+    penetration = z_current - clamp_data["z_clamp"]
+
+    # unilateral: only push back if positive
+    fz = -k * np.maximum(0.0, penetration)
+
+    # build full force array
+    forces = np.zeros_like(u)
+    forces[:, 2] = fz
+
+    # apply only to clamp nodes
+    forces[~clamp_data["mask"]] = 0.0
+
+    return forces
 
 #function for adding glyphs to show BCs
 def add_bc_nodes(plotter, nodes, color, grid, points):
@@ -255,7 +281,7 @@ def ShowItOff(NOPs):
 
     field, tetra_mesh, tetra_cells, points = CreateFeField(NOPs)
 
-    bcs, masks = CreateBCs(NOPs, field, points)
+    bcs, masks, clamp_data = CreateBCs(NOPs, field, points)
 
     print("Number of points in mesh:", tetra_mesh.points.shape[0])
 
@@ -285,7 +311,7 @@ def ShowItOff(NOPs):
     material = fe.Hyperelastic(mooney_rivlin, C10 = NOPs.MaterialCoefficients[0], C01 = NOPs.MaterialCoefficients[1])
 
     # Define your solid body
-    solid_out = fe.SolidBody(material, field)
+    solid_out = IncludeClampForce(material, field, points, clamp_data, NOPs.K_clamp)
     
     #Make separate bcs for each one
     bcs_out = bcs
@@ -341,8 +367,8 @@ def ShowItOff(NOPs):
     #Now do the other way, but recompute the starting points first
     field, tetra_mesh, tetra_cells, points = CreateFeField(NOPs)
 
-    bcs, masks = CreateBCs(NOPs, field, points)
-    solid_in = fe.SolidBody(material, field)
+    bcs, masks, clamp_data = CreateBCs(NOPs, field, points)
+    solid_in = IncludeClampForce(material, field, points, clamp_data, NOPs.K_clamp)
     bcs_in = bcs
     steps_in = fe.math.linsteps([0,-NOPs.Xmax], num=round(NOPs.N_Steps/2))
      # Define a step
@@ -466,7 +492,7 @@ def AnalyzeItOneWay(NOPs, Direction, fe_mesh_field = None):
         tetra_mesh = field[0].region.mesh
         points = tetra_mesh.points
 
-    bcs, masks = CreateBCs(NOPs, field, points)
+    bcs, masks, clamp_data = CreateBCs(NOPs, field, points)
    
     ###
     #material data
@@ -476,7 +502,9 @@ def AnalyzeItOneWay(NOPs, Direction, fe_mesh_field = None):
     
 
     # Define your solid body
-    solid = fe.SolidBody(material, field)
+    k_clamp = 1e3  # start here, tune later
+
+    solid = ClampSpring(material, field, points, clamp_data, k_clamp)
     
     # Define the displacement “ramp” (0 → some value) in linsteps
 

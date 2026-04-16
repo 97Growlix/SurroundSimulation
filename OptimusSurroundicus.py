@@ -40,7 +40,7 @@ ConeLaunchAngleRange = (85, 102)
 #SurroundDepthRange = (25, 50)
 ControlSplineDepthRange = (40,80)
 #SurroundApexOffsetRange = (-5, 5)  #Not using anymore
-ConeEnclosureGapRange = (30,50)
+#ConeEnclosureGapRange = (30,50)
 #ApexSplineWeightRange = (4,8)
 #ConeSplineWeightRange = (15,25)
 
@@ -54,20 +54,20 @@ ConeLaunchAngleGuess = 89.15
 #SurroundDepthGuess = 47.15
 ControlSplineDepthGuess = 59.4
 #SurroundApexOffsetGuess = -0.2 #'Distance from centerline bw enclosure and cone towards cone
-ConeEnclosureGapGuess = 47.96
+#ConeEnclosureGapGuess = 47.96
 #ApexSplineWeightGuess = 6
 #ConeSplineWeightGuess = 20
 
 #Non-optimization geometry parameters and such 
 NOPs = NonOptimParams()
 
-NOPs.ConeWidth =732.8
-NOPs.ConeHeight = 1052.6
-NOPs.ConeCornerRadius = 199
-NOPs.ConeOffset = -1  #'Distance the cone mounting face protrudes outward from enclosure mounting face
+NOPs.ConeWidth =745.49
+NOPs.ConeHeight = 1065.299
+NOPs.ConeCornerRadius = 203.2
+NOPs.ConeOffset = 2  #'Distance the cone mounting face protrudes outward from enclosure mounting face
 NOPs.MountingGap = 0.5
 NOPs.MountFlangeThickness = 2
-
+NOPs.ConeEnclosureGap = 33.443
 
 #Other things
 NOPs.TriggerPath = Path(r"C:\Users\Gaming pc\Documents\GitHub\SurroundSimulation\NeighborhoodWatch\run.trigger")
@@ -79,34 +79,35 @@ NOPs.MaterialCoefficients = [0.513, 0.1404] #C10, C01 these were obtained from s
 NOPs.MeshFine = 2
 NOPs.MeshCoarse = 5
 NOPs.N_Steps = 20
+NOPs.K_clamp = 100
 NOPs.Node_find_tol = 1e-2
 NOPs.maxfevPow = 700
 NOPs.maxiterPow = 200
 NOPs.popsizeDE = 30
 NOPs.maxfevDE = 650
 FusionExe = os.path.expandvars(r"C:\Users\%USERNAME%\AppData\Local\Autodesk\webdeploy\production\10477bbe50cc169c7bd2cee9059bc7c9d0b71ec0\Fusion360.exe")
-TrackingFile = Path(__file__).parent / "TrackedBests.txt"
+TrackingFile = Path(__file__).parent / "TrackedBests416.txt"
 
-Algorithm = "Powell" ##Options are "DE", "Powell", or "Both"
-Resuming = True  ##If true, then take the best x from the trackedbests file and start from there
+Algorithm = "Both" ##Options are "DE", "Powell", or "Both"
+Resuming = False  ##If true, then take the best x from the trackedbests file and start from there
 
 Iter =0
 
-
 ##tidy up user inputs into lists/arrays
 bounds = [ConeSideThicknessRange, MiddleThicknessRange, EnclosureSideThicknessRange, 
-          EnclosureLaunchAngleRange, ConeLaunchAngleRange, ControlSplineDepthRange, ConeEnclosureGapRange]
+          EnclosureLaunchAngleRange, ConeLaunchAngleRange, ControlSplineDepthRange]
 
 print(NOPs.maxfevDE//(NOPs.popsizeDE*len(bounds) - 1))
 #Initial guess
 x0 = np.array([ConeSideThicknessGuess, MiddleThicknessGuess, EnclosureSideThicknessGuess, 
-               EnclosureLaunchAngleGuess, ConeLaunchAngleGuess, ControlSplineDepthGuess, ConeEnclosureGapGuess])
+               EnclosureLaunchAngleGuess, ConeLaunchAngleGuess, ControlSplineDepthGuess])
 
 #global vars to track best solution if optimizer doesn't converge
-best_x = None
+best_x = x0
 best_score = float('inf')
- 
+
 def objective(OptP, NOPs):
+    
     return 0
     global best_x, best_score
     try:
@@ -114,14 +115,13 @@ def objective(OptP, NOPs):
     
         #params used to create surround geometry
         params = [("ConeSideThickness", OptP[0]), ("MiddleThickness", OptP[1]), ("EnclosureSideThickness", OptP[2]), 
-                ("EnclosureLaunchAngle", OptP[3]), ("ConeLaunchAngle", OptP[4]), ("ControlSplineDepth", OptP[5]), ("ConeEnclosureGap", OptP[6]),
+                ("EnclosureLaunchAngle", OptP[3]), ("ConeLaunchAngle", OptP[4]), ("ControlSplineDepth", OptP[5]), ("ConeEnclosureGap", NOPs.ConeEnclosureGap),
                 ("ConeWidth", NOPs.ConeWidth), ("MountingGap", NOPs.MountingGap),
                 ("ConeHeight", NOPs.ConeHeight), ("ConeCornerRadius", NOPs.ConeCornerRadius), ("ConeOffset", NOPs.ConeOffset), 
                 ("MountFlangeThickness", NOPs.MountFlangeThickness)]
         
-        NOPs.ConeEnclosureGap = OptP[6]  ## yes I know it's technically an optimized parameter and using this in this way isn't very easy to read. I'll fix it later :)
-
-        print(params[0:7])
+        
+        print(params[0:6])
         
         #This modifies the cad file and exports as a step
        
@@ -186,12 +186,11 @@ def objective(OptP, NOPs):
 
 def FinishOut(OptP):
     params = [("ConeSideThickness", OptP[0]), ("MiddleThickness", OptP[1]), ("EnclosureSideThickness", OptP[2]), 
-                ("EnclosureLaunchAngle", OptP[3]), ("ConeLaunchAngle", OptP[4]), ("SurroundDepth", OptP[5]), ("ConeEnclosureGap", OptP[6]),
+                ("EnclosureLaunchAngle", OptP[3]), ("ConeLaunchAngle", OptP[4]), ("SurroundDepth", OptP[5]), ("ConeEnclosureGap", NOPs.ConeEnclosureGap),
                 ("ConeWidth", NOPs.ConeWidth), ("MountingGap", NOPs.MountingGap),
                 ("ConeHeight", NOPs.ConeHeight), ("ConeCornerRadius", NOPs.ConeCornerRadius), ("ConeOffset", NOPs.ConeOffset)]
     
-    NOPs.ConeEnclosureGap = OptP[6]  ## yes I know it's technically an optimized parameter and using this in this way isn't very easy to read. I'll fix it later :)
-
+    
     CreateTrigger(params)
     WaitOnFusion()
     
