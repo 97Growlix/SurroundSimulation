@@ -35,10 +35,10 @@ import cadquery as cq
 ConeSideThicknessRange = (1.5, 4)
 MiddleThicknessRange = (0.8, 4)
 EnclosureSideThicknessRange = (1.5,4)
-EnclosureLaunchAngleRange = (85, 102)
-ConeLaunchAngleRange = (85, 102)
+EnclosureLaunchAngleRange = (92, 102)
+ConeLaunchAngleRange = (92, 102)
 #SurroundDepthRange = (25, 50)
-ControlSplineDepthRange = (40,80)
+ControlSplineDepthRange = (40,90)
 #SurroundApexOffsetRange = (-5, 5)  #Not using anymore
 #ConeEnclosureGapRange = (30,50)
 #ApexSplineWeightRange = (4,8)
@@ -46,13 +46,13 @@ ControlSplineDepthRange = (40,80)
 
 
 #Initial guesses
-ConeSideThicknessGuess = 3
-MiddleThicknessGuess = 2
-EnclosureSideThicknessGuess = 2
-EnclosureLaunchAngleGuess = 96.5
-ConeLaunchAngleGuess = 89.15
+ConeSideThicknessGuess = 3.39
+MiddleThicknessGuess = 2.78
+EnclosureSideThicknessGuess = 1.72
+EnclosureLaunchAngleGuess = 96.96
+ConeLaunchAngleGuess = 87.48
 #SurroundDepthGuess = 47.15
-ControlSplineDepthGuess = 59.4
+ControlSplineDepthGuess = 59.45
 #SurroundApexOffsetGuess = -0.2 #'Distance from centerline bw enclosure and cone towards cone
 #ConeEnclosureGapGuess = 47.96
 #ApexSplineWeightGuess = 6
@@ -74,7 +74,7 @@ NOPs.TriggerPath = Path(r"C:\Users\Gaming pc\Documents\GitHub\SurroundSimulation
 NOPs.stepout_path = r"C:\Users\Gaming pc\Documents\GitHub\SurroundSimulation\SurroundMutation.step"
 NOPs.Xmax = 45 #mm one way
 NOPs.TargetStiffness = 1 #N/mm
-NOPs.OptimizationWeights = [("Kms Flatness", 5e3), ("Kms90 Flatness", 1e5), ("Volume", 1e-6), ("Delta^2 from TargetStiffness", 5e-2)]
+NOPs.OptimizationWeights = [("Kms Flatness", 5e3), ("Kms90 Flatness", 1e5), ("Volume", 1e-5), ("Delta^2 from TargetStiffness", 5e-1)]
 NOPs.MaterialCoefficients = [0.513, 0.1404] #C10, C01 these were obtained from state-of-the-art sketchy tensile tests and curve fitting
 NOPs.MeshFine = 2
 NOPs.MeshCoarse = 5
@@ -86,18 +86,24 @@ NOPs.maxiterPow = 200
 NOPs.popsizeDE = 30
 NOPs.maxfevDE = 650
 FusionExe = os.path.expandvars(r"C:\Users\%USERNAME%\AppData\Local\Autodesk\webdeploy\production\10477bbe50cc169c7bd2cee9059bc7c9d0b71ec0\Fusion360.exe")
-TrackingFile = Path(__file__).parent / "TrackedBests416.txt"
 
+##### Things I may want to change each time
+#
+
+TrackingFile = Path(__file__).parent / "TrackedBests420.txt"
+CachingFile = Path(__file__).parent / "CachedSolutions420.txt"
 Algorithm = "Both" ##Options are "DE", "Powell", or "Both"
 Resuming = False  ##If true, then take the best x from the trackedbests file and start from there
+IncludeSpider = True ##include spider stiffness in scoring and optimizing or not
+
+#
+######3
 
 Iter =0
-
 ##tidy up user inputs into lists/arrays
 bounds = [ConeSideThicknessRange, MiddleThicknessRange, EnclosureSideThicknessRange, 
           EnclosureLaunchAngleRange, ConeLaunchAngleRange, ControlSplineDepthRange]
 
-print(NOPs.maxfevDE//(NOPs.popsizeDE*len(bounds) - 1))
 #Initial guess
 x0 = np.array([ConeSideThicknessGuess, MiddleThicknessGuess, EnclosureSideThicknessGuess, 
                EnclosureLaunchAngleGuess, ConeLaunchAngleGuess, ControlSplineDepthGuess])
@@ -107,8 +113,7 @@ best_x = x0
 best_score = float('inf')
 
 def objective(OptP, NOPs):
-    
-    return 0
+
     global best_x, best_score
     try:
         global Iter 
@@ -132,7 +137,7 @@ def objective(OptP, NOPs):
         print("Volume=", Volume)
         #to find the fitness score of the surround
         Kms, Disp = AnalyzeItBothWays(NOPs) 
-        print('a')
+        
         #Calculate KmsFlatness
         KmsAvg = np.mean(Kms)
         KmsDev = Kms - KmsAvg
@@ -148,10 +153,36 @@ def objective(OptP, NOPs):
         Kms90Dev = Kms90 - Kms90Avg
         Kms90F = np.sum(Kms90Dev**2)/len(Kms90)
 
+        #Calculate total stiffness (spider + surround)
+        KmsSpider = [CalcKSpider(u) for u in Disp]
+        KmsT = Kms + KmsSpider
+        
+        #Calculate KmsT90
+        KmsT90 = KmsT[start:end]
+        KmsT90Avg = np.mean(KmsT90)
+        KmsT90Dev = KmsT90 - KmsT90Avg
+        KmsT90F = np.sum(KmsT90Dev**2)/len(KmsT90)
+
+        #Calculate KmsT Flatness
+        KmsTAvg = np.mean(KmsT)
+        KmsTDev = KmsT - KmsTAvg
+        KmsTF = np.sum(KmsTDev**2)/len(KmsT90)
+
+
+
         #Calculate shift (difference in avg stiffness from target stiffness)
         Shift = (KmsAvg - NOPs.TargetStiffness)**2
         
-        Scores = np.array([KmsF, Kms90F, Volume, Shift], dtype = float)
+        print('Kms')
+        print(Kms)
+        print(KmsT)
+        print(KmsTF)
+
+        if IncludeSpider == True:
+            Scores = np.array([KmsTF, KmsT90F, Volume, Shift], dtype = float)
+        else:
+            Scores = np.array([KmsF, Kms90F, Volume, Shift], dtype = float)
+
         PureWeights = [w[1] for w in NOPs.OptimizationWeights]
         PureWeights = np.array(PureWeights, dtype = float)
 
@@ -166,7 +197,11 @@ def objective(OptP, NOPs):
             with open(TrackingFile, 'a') as f:
                 f.write(f"score: {best_score}\n")
                 f.write(f"params: {best_x.tolist()}\n")
-             
+
+        with open(CachingFile, 'a') as f:
+                f.write(f"scores: {Scores}\n")
+                f.write(f"params: {params}\n")
+
         print('Current score:')
         print(SurroundScore)
         print('Breakdown')
@@ -206,7 +241,7 @@ def CreateTrigger(Parameters):
     StepFile = Path(NOPs.stepout_path)
     
     if StepFile.exists():  ##delete if present
-        StepFile.unlink()
+        safe_unlink(StepFile)
 
     Parameters = [(name, float(val)) for name, val in Parameters]
 
@@ -247,7 +282,7 @@ def CalcVolume(StepPath):
 def main():
     global best_x, best_score, x0
     if Resuming == True:
-        with open(TrackingFile) as f:
+        with open(TrackingFile, 'a+') as f:
             lines = f.readlines()
         try:
             last_params_line = [l for l in lines if l.startswith("params:")][-1]
@@ -275,7 +310,7 @@ def main():
                         options={
                             #"maxiter": NOPs.maxiterPow,
                             "maxfev": NOPs.maxfevPow,
-                            "ftol": 0.5,
+                            "ftol": 0.1,
                             "disp": True}
                         )
     elif Algorithm == "DE":
@@ -284,7 +319,7 @@ def main():
                                         args = (NOPs,),
                                         strategy='best1bin',
                                         maxiter= NOPs.maxfevDE//(NOPs.popsizeDE*len(bounds) - 1),
-                                        tol = 0.5,
+                                        tol = 0.3,
                                         recombination = 0.7,
                                         polish = False, 
                                         popsize = 20)
@@ -294,7 +329,7 @@ def main():
                                         args = (NOPs,),
                                         strategy='best1bin',
                                         maxiter= NOPs.maxfevDE//(NOPs.popsizeDE*len(bounds) - 1),
-                                        tol = 0.5,
+                                        tol = 0.3,
                                         recombination = 0.7,
                                         polish = False, 
                                         popsize = 10,
@@ -311,7 +346,7 @@ def main():
                         options={
                             #"maxiter": NOPs.maxiterPow,
                             "maxfev": NOPs.maxfevPow,
-                            "ftol": 0.5,
+                            "ftol": .01,
                             "disp": True}
                         )
     else:

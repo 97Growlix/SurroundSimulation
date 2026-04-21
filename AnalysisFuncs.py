@@ -8,7 +8,18 @@ from felupe.constitution.tensortrax.models.hyperelastic import mooney_rivlin
 from SurroundClasses import *
 from multiprocessing import Pool
 from pypardiso import spsolve
+from datetime import datetime
+import os
+import time
 
+def safe_unlink(path, retries=10, delay=0.5):
+    for _ in range(retries):
+        try:
+            os.unlink(path)
+            return
+        except PermissionError:
+            time.sleep(delay)
+    raise
 
 def AnalyzeItBothWays(NOPs):
     
@@ -191,6 +202,7 @@ def CreateBCs(NOPs, field, points):
         (((r>=(R_inner_for_outer-NOPs.ConeEnclosureGap/2)) & (x_mod >= 0) & (y_mod >= 0)) |\
         ((y_mod>=(R_inner_for_outer-NOPs.ConeEnclosureGap/2)) | (x_mod >= (R_inner_for_outer-NOPs.ConeEnclosureGap/2))))
 
+
     ###
     #boundary cond
     ###
@@ -226,10 +238,7 @@ def CreateBCs(NOPs, field, points):
         mask = (Cone_Corner_Mask | Cone_Top_Edge_Mask | Cone_Right_Edge_Mask),            # selects all nodes from the earlier mask
         skip=(False, False, True) # constrain only Z (doesn't actually matter I think)
     )
-    clamp_data = {
-        "mask": Enclosure_Clamp_Mask,
-        "z_clamp": Clamp_Z_Height
-    }    
+   
 
     #group all the bcs together
     bcs = dict()
@@ -244,27 +253,10 @@ def CreateBCs(NOPs, field, points):
     masks["InnerTop"] = Cone_Top_Edge_Mask
     masks["InnerRight"] = Cone_Right_Edge_Mask
     masks["Outer"] = Enclosure_Mounting_Mask
+    masks["Clamp"] = Enclosure_Clamp_Mask
 
 
-    return bcs, masks, clamp_data
-
-def clamp_spring_force(x, points, clamp_data, k):
-    u = x[0].values  # (num_nodes, 3)
-
-    z_current = points[:, 2] + u[:, 2]
-    penetration = z_current - clamp_data["z_clamp"]
-
-    # unilateral: only push back if positive
-    fz = -k * np.maximum(0.0, penetration)
-
-    # build full force array
-    forces = np.zeros_like(u)
-    forces[:, 2] = fz
-
-    # apply only to clamp nodes
-    forces[~clamp_data["mask"]] = 0.0
-
-    return forces
+    return bcs, masks
 
 #function for adding glyphs to show BCs
 def add_bc_nodes(plotter, nodes, color, grid, points):
@@ -281,7 +273,7 @@ def ShowItOff(NOPs):
 
     field, tetra_mesh, tetra_cells, points = CreateFeField(NOPs)
 
-    bcs, masks, clamp_data = CreateBCs(NOPs, field, points)
+    bcs, masks = CreateBCs(NOPs, field, points)
 
     print("Number of points in mesh:", tetra_mesh.points.shape[0])
 
@@ -311,9 +303,18 @@ def ShowItOff(NOPs):
     material = fe.Hyperelastic(mooney_rivlin, C10 = NOPs.MaterialCoefficients[0], C01 = NOPs.MaterialCoefficients[1])
 
     # Define your solid body
-    solid_out = IncludeClampForce(material, field, points, clamp_data, NOPs.K_clamp)
+    solid_out = fe.SolidBody(material, field)
     
     #Make separate bcs for each one
+    bc_clamp = fe.Boundary(
+        field[0],
+        mask = masks["Clamp"],             # select points where enclosure mount is
+        skip = (True, True, False)
+    )
+    bcs["clamp"] = bc_clamp
+   
+
+
     bcs_out = bcs
 
     # Define the displacement “ramp” (0 → some value) in linsteps
@@ -367,8 +368,8 @@ def ShowItOff(NOPs):
     #Now do the other way, but recompute the starting points first
     field, tetra_mesh, tetra_cells, points = CreateFeField(NOPs)
 
-    bcs, masks, clamp_data = CreateBCs(NOPs, field, points)
-    solid_in = IncludeClampForce(material, field, points, clamp_data, NOPs.K_clamp)
+    bcs, masks= CreateBCs(NOPs, field, points)
+    solid_in = fe.SolidBody(material, field)
     bcs_in = bcs
     steps_in = fe.math.linsteps([0,-NOPs.Xmax], num=round(NOPs.N_Steps/2))
      # Define a step
@@ -382,7 +383,9 @@ def ShowItOff(NOPs):
     
 
     ### For animation
-    gif_path = "surround_mesh_animation.gif"
+    TimeStamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    gif_path = f"SurroundGifs/solution_{TimeStamp}.gif"
+    #gif_path = "surround_mesh_animation.gif"
 
     # Create plotter window (visible)
     pl = pv.Plotter(window_size=(900, 700))
@@ -445,9 +448,13 @@ def ShowItOff(NOPs):
     # Compute stiffness
     kms = np.gradient(force, disp)
 
+    #compute total Kms with spider
+    kmsSpider = [CalcKSpider(u) for u in disp]
+    kmsT = kms + kmsSpider
+    print(kmsT)
 
     ##plot the graphs of force and kms
-    fig, axs = plt.subplots(2, 1, figsize=(6, 10))
+    fig, axs = plt.subplots(1, 3, figsize=(14, 6))
 
     axs[0].plot(disp, force, '-o')
     axs[0].set_xlabel("Displacement [mm]")
@@ -462,7 +469,19 @@ def ShowItOff(NOPs):
     axs[1].grid(True)
     axs[1].set_ylim([0,max(kms)*1.3])
 
+    axs[2].plot(disp, kmsT, '-o')
+    axs[2].set_xlabel("Displacement [mm]")
+    axs[2].set_ylabel("Total Stiffness (including spider)")
+    axs[2].set_title("Total Kms")
+    axs[2].grid(True)
+    axs[2].set_ylim([0, max(kmsT)*1.3])
+
     plt.tight_layout()
+
+    TimeStamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    filename = f"Plots/plot_{TimeStamp}.png"
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+
     plt.show()
 
     return 0 
@@ -492,7 +511,7 @@ def AnalyzeItOneWay(NOPs, Direction, fe_mesh_field = None):
         tetra_mesh = field[0].region.mesh
         points = tetra_mesh.points
 
-    bcs, masks, clamp_data = CreateBCs(NOPs, field, points)
+    bcs, masks = CreateBCs(NOPs, field, points)
    
     ###
     #material data
@@ -502,14 +521,22 @@ def AnalyzeItOneWay(NOPs, Direction, fe_mesh_field = None):
     
 
     # Define your solid body
-    k_clamp = 1e3  # start here, tune later
 
-    solid = ClampSpring(material, field, points, clamp_data, k_clamp)
+    solid = fe.SolidBody(material, field)
     
     # Define the displacement “ramp” (0 → some value) in linsteps
 
     steps = fe.math.linsteps([0,NOPs.Xmax*Direction], num=round(NOPs.N_Steps/2))
     
+    if Direction == 1:
+        bc_clamp = fe.Boundary(
+            field[0],
+            mask = masks["Clamp"],             # select points where enclosure mount is
+            skip = (True, True, False)
+        )
+        bcs["clamp"] = bc_clamp
+        print('Clamping')
+
     # Define a step
     step = fe.Step(
         items=[solid],
@@ -531,6 +558,11 @@ def AnalyzeItOneWay(NOPs, Direction, fe_mesh_field = None):
     kms = np.gradient(force, disp)
 
     return kms, disp
+
+def CalcKSpider(X):
+    K = 5 + abs(X)*10/40
+
+    return K
 
 
 def main():

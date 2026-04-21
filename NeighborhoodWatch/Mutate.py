@@ -8,7 +8,7 @@ import json
 
 
 ### Config stuff ###
-CloudFilepath = "Deus/Cinema/Invicta mini/Soft parts/SurroundForOptimisation"
+CloudFilepath = "Deus/Cinema/Invicta mini/Soft parts/SurroundForOptimisationNoRibs"
 OutputDir = r"C:\Users\Gaming pc\Documents\GitHub\SurroundSimulation"
 OutputName = "SurroundMutation.step"
 TrigFile = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run.trigger")
