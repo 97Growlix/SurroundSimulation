@@ -8,10 +8,13 @@ def CalcRfSpider(X):
 
 X = np.linspace(-45,45,22)
 
-RfSpider = [CalcRfSpider(u) for u in X]
+#RfSpider = [CalcRfSpider(u) for u in X]
 
-print(RfSpider)
+#print(RfSpider)
 
 
-plt.plot(X, RfSpider)
-plt.show()
+#plt.plot(X, RfSpider)
+#plt.show()
+
+print(np.argwhere(45, X))
+

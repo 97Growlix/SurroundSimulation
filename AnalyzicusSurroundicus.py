@@ -82,7 +82,7 @@ NOPs.MaterialCoefficients = [0.5, 0.1] #C10, C01 these were obtained from state-
 
 
 NOPs.MeshFine = 1.2
-NOPs.MeshCoarse = 1.5
+NOPs.MeshCoarse = 1.5 
 NOPs.N_Steps = 20
 NOPs.Node_find_tol = 1e-6
 NOPs.maxfevPow = 700

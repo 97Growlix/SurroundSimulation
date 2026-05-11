@@ -22,7 +22,6 @@ import psutil
 import subprocess
 #import sys
 from pathlib import Path
-import cadquery as cq
 
 
 
@@ -32,13 +31,14 @@ import cadquery as cq
 ###
 
 #Optimization CAD parameter ranges
+PointinessRange = (-25, 25)
 ConeSideThicknessRange = (1.5, 4)
-MiddleThicknessRange = (0.8, 4)
+MiddleThicknessRange = (0.8, 5)
 EnclosureSideThicknessRange = (1.5,4)
-EnclosureLaunchAngleRange = (92, 102)
-ConeLaunchAngleRange = (92, 102)
+EnclosureLaunchAngleRange = (91, 102)
+ConeLaunchAngleRange = (91, 102)
 #SurroundDepthRange = (25, 50)
-ControlSplineDepthRange = (40,90)
+ControlSplineDepthRange = (40,100)
 #SurroundApexOffsetRange = (-5, 5)  #Not using anymore
 #ConeEnclosureGapRange = (30,50)
 #ApexSplineWeightRange = (4,8)
@@ -46,6 +46,7 @@ ControlSplineDepthRange = (40,90)
 
 
 #Initial guesses
+Pointiness = 0
 ConeSideThicknessGuess = 3.39
 MiddleThicknessGuess = 2.78
 EnclosureSideThicknessGuess = 1.72
@@ -74,7 +75,7 @@ NOPs.TriggerPath = Path(r"C:\Users\Gaming pc\Documents\GitHub\SurroundSimulation
 NOPs.stepout_path = r"C:\Users\Gaming pc\Documents\GitHub\SurroundSimulation\SurroundMutation.step"
 NOPs.Xmax = 45 #mm one way
 NOPs.TargetStiffness = 1 #N/mm
-NOPs.OptimizationWeights = [("Kms Flatness", 5e3), ("Kms90 Flatness", 1e5), ("Volume", 1e-5), ("Delta^2 from TargetStiffness", 5e-1)]
+NOPs.OptimizationWeights = [("Kms Flatness", 5e3), ("Kms90 Flatness", 1e5), ("Volume", 1e-5), ("Delta^2 from TargetStiffness", 5e-1), ("Asymmetry", 1e4)]
 NOPs.MaterialCoefficients = [0.513, 0.1404] #C10, C01 these were obtained from state-of-the-art sketchy tensile tests and curve fitting
 NOPs.MeshFine = 2
 NOPs.MeshCoarse = 5
@@ -83,110 +84,70 @@ NOPs.K_clamp = 100
 NOPs.Node_find_tol = 1e-2
 NOPs.maxfevPow = 700
 NOPs.maxiterPow = 200
-NOPs.popsizeDE = 30
+NOPs.popsizeDE = 40
 NOPs.maxfevDE = 650
 FusionExe = os.path.expandvars(r"C:\Users\%USERNAME%\AppData\Local\Autodesk\webdeploy\production\10477bbe50cc169c7bd2cee9059bc7c9d0b71ec0\Fusion360.exe")
 
 ##### Things I may want to change each time
 #
 
-TrackingFile = Path(__file__).parent / "TrackedBests420.txt"
-CachingFile = Path(__file__).parent / "CachedSolutions420.txt"
+TrackingFile = Path(__file__).parent / "TrackedBests508.txt"
+CachingFile = Path(__file__).parent / "CachedSolutions508.txt"
 Algorithm = "Both" ##Options are "DE", "Powell", or "Both"
 Resuming = False  ##If true, then take the best x from the trackedbests file and start from there
-IncludeSpider = True ##include spider stiffness in scoring and optimizing or not
-
+NOPs.IncludeSpider = False ##include spider stiffness in scoring and optimizing or not
+AnalyzeOnly = True ## Do this to just analyze a solution, not optimize
+AnalysisOnlyParams = np.array([
+    2.30, #Cone side thickness
+    0.95, #Middle thickness
+    1.62, #Enclosure side thickness
+    93.7,  #Enclosure launch angle
+    96.2, #Cone launch angle
+    47.8, #Control spline depth
+    -4.4 #Pointiness
+])
 #
 ######3
 
 Iter =0
 ##tidy up user inputs into lists/arrays
 bounds = [ConeSideThicknessRange, MiddleThicknessRange, EnclosureSideThicknessRange, 
-          EnclosureLaunchAngleRange, ConeLaunchAngleRange, ControlSplineDepthRange]
+          EnclosureLaunchAngleRange, ConeLaunchAngleRange, ControlSplineDepthRange, PointinessRange]
 
 #Initial guess
 x0 = np.array([ConeSideThicknessGuess, MiddleThicknessGuess, EnclosureSideThicknessGuess, 
-               EnclosureLaunchAngleGuess, ConeLaunchAngleGuess, ControlSplineDepthGuess])
+               EnclosureLaunchAngleGuess, ConeLaunchAngleGuess, ControlSplineDepthGuess, Pointiness])
 
 #global vars to track best solution if optimizer doesn't converge
 best_x = x0
 best_score = float('inf')
 
 def objective(OptP, NOPs):
-
+    
     global best_x, best_score
     try:
         global Iter 
     
         #params used to create surround geometry
         params = [("ConeSideThickness", OptP[0]), ("MiddleThickness", OptP[1]), ("EnclosureSideThickness", OptP[2]), 
-                ("EnclosureLaunchAngle", OptP[3]), ("ConeLaunchAngle", OptP[4]), ("ControlSplineDepth", OptP[5]), ("ConeEnclosureGap", NOPs.ConeEnclosureGap),
+                ("EnclosureLaunchAngle", OptP[3]), ("ConeLaunchAngle", OptP[4]), ("ControlSplineDepth", OptP[5]), ("Pointiness", OptP[6]), ("ConeEnclosureGap", NOPs.ConeEnclosureGap),
                 ("ConeWidth", NOPs.ConeWidth), ("MountingGap", NOPs.MountingGap),
                 ("ConeHeight", NOPs.ConeHeight), ("ConeCornerRadius", NOPs.ConeCornerRadius), ("ConeOffset", NOPs.ConeOffset), 
                 ("MountFlangeThickness", NOPs.MountFlangeThickness)]
         
         
-        print(params[0:6])
+        print(params[0:7])
         
         #This modifies the cad file and exports as a step
        
         CreateTrigger(params)  ##This creates a trigger file, which tells fusion to open the surround file and make changes according to what's in the trigger file, then export
         WaitOnFusion()
         
-        Volume = CalcVolume(NOPs.stepout_path)
-        print("Volume=", Volume)
+        
         #to find the fitness score of the surround
         Kms, Disp = AnalyzeItBothWays(NOPs) 
-        
-        #Calculate KmsFlatness
-        KmsAvg = np.mean(Kms)
-        KmsDev = Kms - KmsAvg
-        KmsF = np.sum(KmsDev**2)/len(Kms)
 
-        
-        #Calculate Kms90Flatness
-        n = len(Kms)
-        start = int(n*.05)
-        end = int(n*.95)
-        Kms90 = Kms[start:end]
-        Kms90Avg = np.mean(Kms90)
-        Kms90Dev = Kms90 - Kms90Avg
-        Kms90F = np.sum(Kms90Dev**2)/len(Kms90)
-
-        #Calculate total stiffness (spider + surround)
-        KmsSpider = [CalcKSpider(u) for u in Disp]
-        KmsT = Kms + KmsSpider
-        
-        #Calculate KmsT90
-        KmsT90 = KmsT[start:end]
-        KmsT90Avg = np.mean(KmsT90)
-        KmsT90Dev = KmsT90 - KmsT90Avg
-        KmsT90F = np.sum(KmsT90Dev**2)/len(KmsT90)
-
-        #Calculate KmsT Flatness
-        KmsTAvg = np.mean(KmsT)
-        KmsTDev = KmsT - KmsTAvg
-        KmsTF = np.sum(KmsTDev**2)/len(KmsT90)
-
-
-
-        #Calculate shift (difference in avg stiffness from target stiffness)
-        Shift = (KmsAvg - NOPs.TargetStiffness)**2
-        
-        print('Kms')
-        print(Kms)
-        print(KmsT)
-        print(KmsTF)
-
-        if IncludeSpider == True:
-            Scores = np.array([KmsTF, KmsT90F, Volume, Shift], dtype = float)
-        else:
-            Scores = np.array([KmsF, Kms90F, Volume, Shift], dtype = float)
-
-        PureWeights = [w[1] for w in NOPs.OptimizationWeights]
-        PureWeights = np.array(PureWeights, dtype = float)
-
-        SurroundScore = np.sum(PureWeights * Scores)
+        SurroundScore, WeightedScores = ScoreKms(Kms, Disp, NOPs)
 
         if SurroundScore < best_score:
             best_score = SurroundScore
@@ -199,13 +160,13 @@ def objective(OptP, NOPs):
                 f.write(f"params: {best_x.tolist()}\n")
 
         with open(CachingFile, 'a') as f:
-                f.write(f"scores: {Scores}\n")
+                f.write(f"scores: {WeightedScores}\n")
                 f.write(f"params: {params}\n")
 
         print('Current score:')
         print(SurroundScore)
         print('Breakdown')
-        print(PureWeights * Scores)
+        print(WeightedScores)
         print("Just finished iteration:", Iter)
         Iter += 1
 
@@ -214,9 +175,7 @@ def objective(OptP, NOPs):
         traceback.print_exc()
         Iter += 1
         return 1e9
-    
-    
-    
+        
     return SurroundScore
 
 def FinishOut(OptP):
@@ -273,16 +232,15 @@ def WaitOnFusion(timeout = 100, poll=1):
             raise TimeoutError("Fusion took too long")
         time.sleep(poll)
 
-def CalcVolume(StepPath):
-    shape = cq.importers.importStep(str(StepPath))
-    volume = shape.val().Volume()
-
-    return volume
-
 def main():
     global best_x, best_score, x0
+    
+    if AnalyzeOnly == True:
+        FinishOut(AnalysisOnlyParams)
+        return 0
+    
     if Resuming == True:
-        with open(TrackingFile, 'a+') as f:
+        with open(TrackingFile, 'r') as f:
             lines = f.readlines()
         try:
             last_params_line = [l for l in lines if l.startswith("params:")][-1]
@@ -310,7 +268,7 @@ def main():
                         options={
                             #"maxiter": NOPs.maxiterPow,
                             "maxfev": NOPs.maxfevPow,
-                            "ftol": 0.1,
+                            "ftol": 1e-4,
                             "disp": True}
                         )
     elif Algorithm == "DE":
@@ -319,7 +277,7 @@ def main():
                                         args = (NOPs,),
                                         strategy='best1bin',
                                         maxiter= NOPs.maxfevDE//(NOPs.popsizeDE*len(bounds) - 1),
-                                        tol = 0.3,
+                                        tol = 0.1,
                                         recombination = 0.7,
                                         polish = False, 
                                         popsize = 20)
@@ -329,7 +287,7 @@ def main():
                                         args = (NOPs,),
                                         strategy='best1bin',
                                         maxiter= NOPs.maxfevDE//(NOPs.popsizeDE*len(bounds) - 1),
-                                        tol = 0.3,
+                                        tol = 0.1,
                                         recombination = 0.7,
                                         polish = False, 
                                         popsize = 10,
@@ -346,19 +304,23 @@ def main():
                         options={
                             #"maxiter": NOPs.maxiterPow,
                             "maxfev": NOPs.maxfevPow,
-                            "ftol": .01,
+                            "ftol": 1e-4,
                             "disp": True}
                         )
     else:
         print("Invalid algorithm choice. Please choose DE or Powell")
-
+    
+    Elapsed_time_min = (time.time() - Start_time)//60
+    Elapsed_hours = Elapsed_time_min//60
+    Elapsed_time_min_remainder = Elapsed_time_min%60
+    
     print("Final Result:")
     print(Result)
     print('Best result')
     print(best_score)
     print('best params')
     print(best_x)
-
+    print("Optimisation time:", Elapsed_hours, "h ", Elapsed_time_min_remainder, "min")
     # Save all attributes to a text file
     with open("optimization_result.txt", "w") as f:
         for attr in dir(Result):
@@ -377,13 +339,15 @@ def main():
         print('This is awkward. The best solution isnt working. try fixing it')
         traceback.print_exc()
         
-    Elapsed_time_min = (time.time() - Start_time)//60
-    Elapsed_hours = Elapsed_time_min//60
-    Elapsed_time_min_remainder = Elapsed_time_min%60
+   
 
 
-    print("Optimisation time:", Elapsed_hours, "h ", Elapsed_time_min_remainder, "min")
+    
     return 0 
 
 if __name__ == "__main__":
     main()
+
+
+
+#add a callback function print so that I know if it's powelling or if its differentially evolving

@@ -28,6 +28,6 @@ class NonOptimParams:
         self.popsizeDE = None
         self.maxiterDE = None
         self.K_clamp = None
-        
+        self.IncludeSpider = None
     pass
 

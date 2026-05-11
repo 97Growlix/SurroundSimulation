@@ -11,6 +11,8 @@ from pypardiso import spsolve
 from datetime import datetime
 import os
 import time
+import cadquery as cq
+
 
 def safe_unlink(path, retries=10, delay=0.5):
     for _ in range(retries):
@@ -128,7 +130,11 @@ def CreateFeField(NOPs):
 
     # Read the Gmsh mesh
     msh_file = "surround.msh"
-    msh = meshio.read(msh_file)
+    try:
+        msh = meshio.read(msh_file)
+    except Exception as e:
+        print("Mesh read failed:", e)
+        return 1e9
 
     # Extract points
     points = msh.points
@@ -294,7 +300,7 @@ def ShowItOff(NOPs):
     ##unconnemt this to show boundary conds
     pv_plotter.camera_position = [(-125.0,-125.0,-25),(50.0,75.0,7.0),(0.0,0.0,1.0)]
     
-    pv_plotter.show()
+    #pv_plotter.show()
 
     ###
     #material data
@@ -384,8 +390,8 @@ def ShowItOff(NOPs):
 
     ### For animation
     TimeStamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    gif_path = f"SurroundGifs/solution_{TimeStamp}.gif"
-    #gif_path = "surround_mesh_animation.gif"
+    gif_path2 = f"SurroundGifs/solution_{TimeStamp}.gif"
+    gif_path = "surround_mesh_animation.gif"
 
     # Create plotter window (visible)
     pl = pv.Plotter(window_size=(900, 700))
@@ -405,7 +411,8 @@ def ShowItOff(NOPs):
         frames.append(pl.screenshot(return_img=True))
 
     pl.close()
-    imageio.mimsave("surround_mesh_animation.gif", frames + frames[::-1], fps=round(NOPs.N_Steps/2), loop = 0)
+    imageio.mimsave(gif_path, frames + frames[::-1], fps=round(NOPs.N_Steps/2), loop = 0)
+    imageio.mimsave(gif_path2, frames + frames[::-1], fps=round(NOPs.N_Steps/2), loop = 0)
     print("GIF saved:", gif_path)
 
     #open the gif automatically
@@ -451,30 +458,35 @@ def ShowItOff(NOPs):
     #compute total Kms with spider
     kmsSpider = [CalcKSpider(u) for u in disp]
     kmsT = kms + kmsSpider
-    print(kmsT)
+    print(f'kmsT {kmsT}')
+
+    SurroundScore, WeightedScores = ScoreKms(kms, disp, NOPs)
 
     ##plot the graphs of force and kms
     fig, axs = plt.subplots(1, 3, figsize=(14, 6))
 
-    axs[0].plot(disp, force, '-o')
+    axs[0].plot(disp, force, '-')
     axs[0].set_xlabel("Displacement [mm]")
     axs[0].set_ylabel("Reaction Force [N]")
     axs[0].set_title("Reaction Force")
     axs[0].grid(True)
 
-    axs[1].plot(disp, kms, '-o')
+    axs[1].plot(disp, kms, '-')
     axs[1].set_xlabel("Displacement [mm]")
     axs[1].set_ylabel("Stiffness [N/mm]")
     axs[1].set_title("Kms")
     axs[1].grid(True)
     axs[1].set_ylim([0,max(kms)*1.3])
 
-    axs[2].plot(disp, kmsT, '-o')
+    axs[2].plot(disp, kmsT, '-', label='Total Kms')
     axs[2].set_xlabel("Displacement [mm]")
     axs[2].set_ylabel("Total Stiffness (including spider)")
     axs[2].set_title("Total Kms")
     axs[2].grid(True)
     axs[2].set_ylim([0, max(kmsT)*1.3])
+    axs[2].plot(disp, kmsSpider, '-', color='red', label='Spider Only')
+    axs[2].legend(loc='lower left')
+
 
     plt.tight_layout()
 
@@ -560,10 +572,86 @@ def AnalyzeItOneWay(NOPs, Direction, fe_mesh_field = None):
     return kms, disp
 
 def CalcKSpider(X):
-    K = 5 + abs(X)*10/40
+    # K = 5 + abs(X)*10/40  This is obsolete now
+    K = 8.76 + 0.0188*X - 2.88E-4*X**2 - 2.94E-5*X**3 + 4.06E-6*X**4
 
     return K
 
+def ScoreKms(Kms, Disp, NOPs):
+    Volume = CalcVolume(NOPs.stepout_path)
+    print("Volume=", Volume)
+    #Calculate KmsFlatness
+    KmsAvg = np.mean(Kms)
+    KmsDev = Kms - KmsAvg
+    KmsF = np.sum(KmsDev**2)/len(Kms)
+
+    
+    #Calculate Kms90Flatness
+    #Now more like kms50 flatness
+    n = len(Kms)
+    start = int(n*.23)
+    end = n-start
+    Kms90 = Kms[start:end]
+    Kms90Avg = np.mean(Kms90)
+    Kms90Dev = Kms90 - Kms90Avg
+    Kms90F = np.sum(Kms90Dev**2)/len(Kms90)
+
+    print(f'Disp90, {Disp[start:end]}')
+
+    #Calculate symmetry about x=0
+    ZeroIndex = len(Kms90)//2
+
+    if len(Kms90) % 2 ==0:
+        LeftSide = Kms90[:ZeroIndex]
+    else:
+        LeftSide = Kms90[:(ZeroIndex+1)]
+    RightSide = Kms90[ZeroIndex:]
+    RightSideMirror = RightSide[::-1]
+    Asym = np.sum((LeftSide-RightSideMirror)**2)
+
+    print(f'Right side mirror {RightSideMirror}')
+    print(f'LeftSide {LeftSide}')
+    print(f'Asym {Asym}')
+
+    #Calculate shift (difference in avg stiffness from target stiffness)
+    Shift = (KmsAvg - NOPs.TargetStiffness)**2
+    
+    print('Kms')
+    print(Kms)
+
+    if NOPs.IncludeSpider == True:
+        #Calculate total stiffness (spider + surround)
+        KmsSpider = [CalcKSpider(u) for u in Disp]
+        KmsT = Kms + KmsSpider
+        
+        #Calculate KmsT90
+        KmsT90 = KmsT[start:end]
+        KmsT90Avg = np.mean(KmsT90)
+        KmsT90Dev = KmsT90 - KmsT90Avg
+        KmsT90F = np.sum(KmsT90Dev**2)/len(KmsT90)
+
+        #Calculate KmsT Flatness
+        KmsTAvg = np.mean(KmsT)
+        KmsTDev = KmsT - KmsTAvg
+        KmsTF = np.sum(KmsTDev**2)/len(KmsT90)
+
+        Scores = np.array([KmsTF, KmsT90F, Volume, Shift, Asym], dtype = float)
+    else:
+        Scores = np.array([KmsF, Kms90F, Volume, Shift, Asym], dtype = float)
+
+    PureWeights = [w[1] for w in NOPs.OptimizationWeights]
+    PureWeights = np.array(PureWeights, dtype = float)
+    
+    WeightedScores = PureWeights*Scores
+    SurroundScore = np.sum(WeightedScores)
+
+    return SurroundScore, WeightedScores
+
+def CalcVolume(StepPath):
+    shape = cq.importers.importStep(str(StepPath))
+    volume = shape.val().Volume()
+
+    return volume
 
 def main():
 
