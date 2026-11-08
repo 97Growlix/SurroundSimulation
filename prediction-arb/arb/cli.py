@@ -27,6 +27,10 @@ def fmt(o: Opportunity) -> str:
     for l, f in zip(o.legs, o.fills):
         lines.append(f"      {l.describe():<70} avg {f.avg_price:.4f} fee ${f.fee:.2f}")
     lines.append(f"    worst case: {o.worst_scenario} -> payout ${o.worst_payout:.2f}")
+    if o.kind == "cross_pair":
+        cap = o.cost + o.fees
+        lines.append(f"    if the venues resolve differently against you, you lose ${cap:.2f}; "
+                     f"the trade is +EV only if that chance is < {o.profit / (o.profit + cap) * 100:.1f}%")
     for n in o.notes:
         lines.append(f"    note: {n}")
     return "\n".join(lines)
@@ -35,7 +39,8 @@ def fmt(o: Opportunity) -> str:
 def to_json(o: Opportunity) -> dict:
     return {"kind": o.kind, "risk_tier": o.risk_tier, "title": o.title, "apy": o.apy, "roi": o.roi,
             "profit": o.profit, "apy_capped": min(o.apy, 99.99), "capital": o.cost + o.fees, "days": o.days, "qty": o.qty,
-            "worst_scenario": o.worst_scenario, "notes": o.notes,
+            "worst_scenario": o.worst_scenario,
+            "breakeven_mismatch_prob": (o.profit / (o.profit + o.cost + o.fees)) if o.kind == "cross_pair" else None, "notes": o.notes,
             "legs": [{"leg": l.describe(), "avg_price": f.avg_price, "fee": f.fee,
                       "close": l.market.close_time.isoformat() if l.market.close_time else None,
                       "url": l.market.url} for l, f in zip(o.legs, o.fills)]}

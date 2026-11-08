@@ -67,6 +67,7 @@ def generate(events: dict[str, list[Event]], cfg: ScanConfig) -> list[Opportunit
                 opps.append(o)
             if (o := strategies.yes_basket(ev, cfg.assume_exhaustive)):
                 opps.append(o)
+            opps += strategies.ladder_pairs(ev)
     # cross-venue pairs: confirmed by a human, plus (optionally) auto-suggested
     by_id = {(m.platform, m.market_id): m for evs in events.values() for ev in evs for m in ev.markets}
     pairs = [(p, True) for p in load_confirmed(DATA / "pairs.json")]

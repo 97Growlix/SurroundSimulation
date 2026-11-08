@@ -36,6 +36,9 @@ about 1.5 minutes: around 12k Kalshi events, 19k Polymarket events and
    * `yes_basket`: buy YES on every outcome. This is only safe when the venue guarantees
      the list is exhaustive. It is off by default; see the findings below for why.
    * `cross_pair`: the same proposition on two venues; buy YES on one and NO on the other.
+   * `ladder`: nested markets within one event, such as "over 10.5" ⊂ "over 7.5" or
+     "by Mar 31" ⊂ "by Jun 30". If the stricter one is priced above the looser one,
+     buy YES on the looser one and NO on the stricter one; the worst case is $1.
 3. **Screen** at the top of the book. Then **verify** against the full order books
    (Kalshi `/orderbook`, Polymarket CLOB `/books`). Choose the quantity that
    maximises *worst-case* profit while still meeting your minimum APY, minimum
@@ -78,6 +81,32 @@ about 1.5 minutes: around 12k Kalshi events, 19k Polymarket events and
 * **Conclusion so far:** a fully automatic "find and buy" bot will mostly find
   wording mismatches. Real, low-risk edges need a **human-verified pair list**
   (tier B), and they are thin. That is the main design decision for the next phase.
+
+## Accepting some risk: near-equivalent pairs (analysis 2026-11-08)
+
+When two venues list "almost the same" question, the price gap is roughly the
+market's estimate of the chance they resolve differently. If the bad mismatch
+happens, you lose **all** the capital in the pair. So a pair with ROI *r* is +EV
+only if P(bad mismatch) < r/(1+r). The headline ROI is the price of that risk.
+
+| Bucket (30 live pairs, ≥$0.50 profit) | Per-trade ROI | Horizon | What it actually was |
+|---|---|---|---|
+| Wording/threshold mismatch | 28–111% | 2–7 d | "above 0.1%" vs "= 0.1%" CPI, Gamer vs Streamer of the Year, 2+ TD props with different void rules |
+| Stale/thin PredictIt books | 14–68% | unknown | PredictIt contracts far from Polymarket (post-election "closest race", French election) |
+| Genuinely identical wording | 0.2–1.5% | 2–90 d | TIME Person of the Year, arrests, Asian Cup, UN Sec-Gen: about 2–20% APY |
+
+Within-venue `ladder` arbitrage (risk-free, tier A) found about 15 live cases, at
+0.1–1.7% per trade (about 1–12% APY), mostly under $400 of depth.
+
+Takeaway: the only route to large ROI is taking resolution-mismatch risk at
+roughly fair odds. The edge appears only where you know the rules better than
+the market (void rules, deadlines, sources). Encode that knowledge as explicit
+scenarios and probabilities, then size so one mismatch can't wipe out many wins.
+
+Two bugs found while building `ladder` are now regression-tested. Both would
+have turned a "risk-free" trade into a directional bet:
+(1) date deadlines treated as numbers with the wrong nesting direction;
+(2) "by December 31" read as 2027 because Polymarket end times are 04:59 UTC on Jan 1.
 
 ## Risks that "risk-free" does not remove
 
