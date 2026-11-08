@@ -70,6 +70,8 @@ def main(argv=None):
                        help="also show tier-C ideas (auto-matched pairs, assumed exhaustive)")
         p.add_argument("--assume-exhaustive", action="store_true")
         p.add_argument("--cache-minutes", type=float, default=0.0)
+        p.add_argument("--paper-tiers", default="A",
+                       help="tiers to paper-trade, e.g. 'A' or 'A,B' (B = registry-verified cross-venue bundles)")
     a = ap.parse_args(argv)
     cfg = cfg_from(a)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -87,8 +89,8 @@ def main(argv=None):
         return
 
     final, screened, _ = run_scan(cfg)
-    print("Risk tiers: A = payout guaranteed by venue rules (mutually exclusive event); "
-          "B = human-confirmed cross-venue pair; C = UNVERIFIED idea, never auto-traded")
+    print("Risk tiers: A = payout guaranteed by one venue's rules; B = cross-venue, same verified "
+          "underlying (registry) or human-confirmed pair; C = UNVERIFIED idea, never auto-traded")
     print(f"\n{len(final)} opportunities >= {a.min_apy}%/yr, >= ${a.min_profit} profit "
           f"(after full order-book + fee check; {len(screened)} passed the top-of-book screen)\n")
     for o in final:
@@ -99,11 +101,12 @@ def main(argv=None):
     if a.cmd == "paper":
         ex = DryRunExecutor(DATA / "paper_ledger.jsonl")
         n = 0
+        tiers = set(a.paper_tiers.upper().split(","))
         for o in final:
-            if o.risk_tier == "A":
+            if o.risk_tier in tiers and not (o.risk_tier == "B" and o.kind != "numeric"):
                 ex.execute(o)
                 n += 1
-        print(f"paper-traded {n} tier-A opportunities -> {ex.ledger}")
+        print(f"paper-traded {n} opportunities (tiers {sorted(tiers)}) -> {ex.ledger}")
 
 
 if __name__ == "__main__":

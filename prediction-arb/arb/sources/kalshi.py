@@ -46,6 +46,7 @@ def _market(m: dict, ev: dict) -> BinaryMarket | None:
         fee=fees.KALSHI,
         book_ref={"ticker": m["ticker"]},
         volume=_f(m.get("volume_fp")) or 0.0,
+        strike={"type": m.get("strike_type"), "floor": m.get("floor_strike"), "cap": m.get("cap_strike")},
     )
 
 

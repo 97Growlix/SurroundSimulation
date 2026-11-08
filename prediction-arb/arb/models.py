@@ -37,6 +37,7 @@ class BinaryMarket:
     fee: FeeModel = NO_FEES
     book_ref: dict = field(default_factory=dict)
     volume: float = 0.0
+    strike: dict = field(default_factory=dict)   # Kalshi strike_type/floor_strike/cap_strike
 
     def ask(self, side: str) -> float | None:
         return self.yes_ask if side == "yes" else self.no_ask

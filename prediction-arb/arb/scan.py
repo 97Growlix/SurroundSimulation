@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import strategies
+from . import numeric, strategies
 from .engine import Opportunity, evaluate, size
 from .http import log
 from .matching import load_confirmed, suggest_pairs
@@ -68,6 +68,8 @@ def generate(events: dict[str, list[Event]], cfg: ScanConfig) -> list[Opportunit
             if (o := strategies.yes_basket(ev, cfg.assume_exhaustive)):
                 opps.append(o)
             opps += strategies.ladder_pairs(ev)
+    # range-covering bundles on registry-verified numeric underlyings
+    opps += numeric.numeric_bundles(events)
     # cross-venue pairs: confirmed by a human, plus (optionally) auto-suggested
     by_id = {(m.platform, m.market_id): m for evs in events.values() for ev in evs for m in ev.markets}
     pairs = [(p, True) for p in load_confirmed(DATA / "pairs.json")]

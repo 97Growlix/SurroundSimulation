@@ -36,6 +36,12 @@ about 1.5 minutes: around 12k Kalshi events, 19k Polymarket events and
    * `yes_basket`: buy YES on every outcome. This is only safe when the venue guarantees
      the list is exhaustive. It is off by default; see the findings below for why.
    * `cross_pair`: the same proposition on two venues; buy YES on one and NO on the other.
+   * `numeric` (range covering): for official numbers listed on several venues
+     (CPI, PCE, GDP, Fed decisions; see `arb/underlyings.py`), each market becomes
+     the set of printed values it pays on. An integer program picks the cheapest
+     set of YES/NO positions that pays at least $1 for *every* possible print, for
+     example Kalshi "core CPI above 0.1%" + Polymarket "≤0.0%" + "0.1%". Works
+     across venues and within Kalshi (threshold vs exact-value ladders).
    * `ladder`: nested markets within one event, such as "over 10.5" ⊂ "over 7.5" or
      "by Mar 31" ⊂ "by Jun 30". If the stricter one is priced above the looser one,
      buy YES on the looser one and NO on the stricter one; the worst case is $1.
@@ -107,6 +113,32 @@ Two bugs found while building `ladder` are now regression-tested. Both would
 have turned a "risk-free" trade into a directional bet:
 (1) date deadlines treated as numbers with the wrong nesting direction;
 (2) "by December 31" read as 2027 because Polymarket end times are 04:59 UTC on Jan 1.
+
+## Range-covering bundles (built 2026-11-08)
+
+`arb/underlyings.py` lists the official numbers that both venues settle on, each
+checked against both rule texts. Live results on the first run (after full
+order books and fees):
+
+| Bundle | Legs | Guaranteed profit | ROI | Settles |
+|---|---|---|---|---|
+| Core CPI MoM, Oct 2026 | Kalshi YES ">0.1%" + Polymarket YES "≤0.0%", "0.1%" | $3.65 on $146 | 2.5% | ~2-4 days |
+| Core CPI YoY, Nov 2026 | Kalshi exact "2.8%" + Kalshi NO ">2.7%" + YES ">2.8%" | $0.48 on $100 | 0.5% | 34 days |
+| Fed decision, Apr 2027 | Kalshi NO "cut 25" + Polymarket YES "25bp decrease" | $0.61 on $49 | 1.2% | 173 days |
+| Fed decision, Dec 2026 / Jan 2027 | Kalshi NO "hike >25" + Polymarket YES "50+ increase" | $0.70-3.30 on $1000 | 0.1-0.3% | 1-3 months |
+
+Excluded after reading the rules: city temperatures (Kalshi NYC = Central Park,
+Polymarket NYC = LaGuardia), crypto prices (different reference time and index),
+and Fed funds *level* vs *decision* (linking them needs the pre-meeting rate).
+
+Residual risks for these bundles: different clauses if the data release is
+delayed (e.g. a government shutdown), Polymarket's UMA dispute process, and
+legging (2-3 orders on 2 venues). Paper-trade them with `python -m arb paper --paper-tiers A,B`.
+
+To add an underlying: read both venues' rules, then add an `Underlying` with the
+Kalshi series tickers and a Polymarket title regex. Events whose bucket labels
+can't be parsed cleanly, or whose parsed buckets overlap, are skipped rather
+than guessed.
 
 ## Risks that "risk-free" does not remove
 
