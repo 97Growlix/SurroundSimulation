@@ -8,3 +8,4 @@ data/scan_*.json
 data/pair_candidates.json
 data/paper_ledger.jsonl
 data/backtest/
+data/live/
