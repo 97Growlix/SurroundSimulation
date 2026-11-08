@@ -127,8 +127,14 @@ def collect_polymarket(start: datetime, end: datetime) -> list[dict]:
                         continue
                     created = parse_ts(m.get("startDate") or m.get("createdAt")) or start
                     s, e = _ts(max(created, start)), _ts(parse_ts(m.get("endDate")) or endd) + 86400
-                    hist = get_json(f"{CLOB}/prices-history", {"market": toks[0], "startTs": s, "endTs": e,
-                                                              "fidelity": 60}).get("history", [])
+                    hist = []
+                    for cs in range(s, e, 14 * 86400):   # API rejects windows longer than ~2 weeks
+                        try:
+                            hist += get_json(f"{CLOB}/prices-history", {
+                                "market": toks[0], "startTs": cs, "endTs": min(e, cs + 14 * 86400),
+                                "fidelity": 60}).get("history", [])
+                        except Exception as ex:      # noqa: BLE001 - keep going, log the gap
+                            log(f"    history gap {m.get('groupItemTitle')}: {ex}")
                     rows.append({
                         "condition_id": m.get("conditionId"), "label": m.get("groupItemTitle") or "",
                         "title": m.get("question"), "outcome_prices": json.loads(m.get("outcomePrices") or "[]"),
@@ -141,10 +147,20 @@ def collect_polymarket(start: datetime, end: datetime) -> list[dict]:
     return events
 
 
+def _cached(name: str, fn):
+    f = OUT / f"{name}.json"
+    if f.exists():
+        return json.loads(f.read_text())
+    d = fn()
+    f.write_text(json.dumps(d))
+    return d
+
+
 def main(start: datetime, end: datetime) -> Path:
     OUT.mkdir(parents=True, exist_ok=True)
     data = {"start": start.isoformat(), "end": end.isoformat(),
-            "kalshi": collect_kalshi(start, end), "polymarket": collect_polymarket(start, end)}
+            "kalshi": _cached("kalshi", lambda: collect_kalshi(start, end)),
+            "polymarket": _cached("polymarket", lambda: collect_polymarket(start, end))}
     path = OUT / "raw.json"
     path.write_text(json.dumps(data))
     return path
