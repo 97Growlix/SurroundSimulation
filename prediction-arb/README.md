@@ -1,0 +1,123 @@
+# prediction-arb
+
+A scanner for **risk-free (arbitrage) opportunities** on prediction markets
+(Kalshi, Polymarket, PredictIt). You set a minimum annualised return. It checks
+every open market, confirms each opportunity against the live order books after
+fees, and logs the trades it *would* make.
+
+**Status: research and paper trading only. There is no code that can spend money.**
+(`LiveExecutor` raises on construction.)
+
+## Quick start
+
+```bash
+pip install -r requirements.txt
+python -m arb scan  --min-apy 15 --min-profit 2 --max-capital 500   # find opportunities
+python -m arb paper --min-apy 15                                     # scan + record dry-run trades of tier-A opps
+python -m arb match                                                  # suggest cross-venue pairs to review
+python -m pytest -q tests
+```
+
+Useful flags: `--platforms kalshi,polymarket`, `--max-days 120` (skip long-dated
+markets), `--include-unverified` (also show tier-C ideas), `--cache-minutes 30`
+(reuse the last snapshot while developing). A full scan of all three venues takes
+about 1.5 minutes: around 12k Kalshi events, 19k Polymarket events and
+360k markets.
+
+## How it works
+
+1. **Fetch.** Pull public market data (no API keys needed) and convert every contract
+   into a `BinaryMarket` with its best YES/NO ask, close date, rules and fee model.
+2. **Generate structural candidates.** For each one, list *every* way it can
+   resolve and which legs pay out in each case (`arb/strategies.py`):
+   * `no_basket`: in a **mutually exclusive** event (Kalshi `mutually_exclusive`,
+     Polymarket `negRisk`), buy NO on a set of outcomes. At most one can win, so
+     at least N-1 legs pay. This does **not** require the outcome list to be complete.
+   * `yes_basket`: buy YES on every outcome. This is only safe when the venue guarantees
+     the list is exhaustive. It is off by default; see the findings below for why.
+   * `cross_pair`: the same proposition on two venues; buy YES on one and NO on the other.
+3. **Screen** at the top of the book. Then **verify** against the full order books
+   (Kalshi `/orderbook`, Polymarket CLOB `/books`). Choose the quantity that
+   maximises *worst-case* profit while still meeting your minimum APY, minimum
+   profit and maximum capital (`arb/engine.py`).
+4. **Annualise.** APY = (1+ROI)^(365/days) - 1, where days runs to the *latest*
+   leg's resolution, plus a 2-day settlement buffer. Capital is locked until then,
+   so a 2% edge that takes a year to settle is a 2% APY.
+
+### Risk tiers
+
+| Tier | Meaning | Auto-traded in paper mode |
+|---|---|---|
+| A | Venue rules guarantee the payout (mutually exclusive event, same venue) | yes |
+| B | Cross-venue pair **you** confirmed in `data/pairs.json` | no (planned) |
+| C | Auto-matched pair or assumed-exhaustive basket: an *idea*, not an arb | never |
+
+## Findings from the first live scan (2026-11-08)
+
+* **Arbitrage within a single venue is essentially gone.** All 6,172 mutually exclusive
+  events on Polymarket and PredictIt, and all Kalshi events, were priced so that
+  no NO-basket cleared fees. The best case (Polymarket NHL Hart Trophy, 90 legs)
+  made **$0.002 on $89**, and it turned negative at any real size. Each venue's
+  YES and NO books are linked, so YES+NO on one contract never costs less than $1.
+* **Buying YES on every outcome is a trap.** Many Polymarket events showed YES prices
+  summing to 0.11-0.30. That looks like free money, but those events have outcomes
+  missing from the listing (unlisted, inactive or "Other" markets). Buying the
+  listed outcomes would most likely lose everything.
+* **The real gaps are between venues, and almost all are false matches.**
+  With `--include-unverified`, the scanner found 46 cross-venue "opportunities",
+  some showing ROI above 100%. Spot checks showed the large ones are different
+  propositions:
+  * Kalshi "Core CPI rises **above** 0.1%" vs Polymarket "Core CPI **is** 0.1%"
+  * Kalshi Streamer Awards "**Gamer** of the Year" vs Polymarket "**Streamer** of the Year"
+  * Kalshi "Mahomes 2+ TDs (**Protected**)" vs a plain Polymarket prop
+  * PredictIt markets that are stale after the outcome is effectively known
+
+  The plausible real ones (same question, small gap) yielded roughly 0.1-1% ROI
+  on events months away. That works out to around 0-8% APY after fees, often on
+  a few hundred dollars of depth.
+* **Conclusion so far:** a fully automatic "find and buy" bot will mostly find
+  wording mismatches. Real, low-risk edges need a **human-verified pair list**
+  (tier B), and they are thin. That is the main design decision for the next phase.
+
+## Risks that "risk-free" does not remove
+
+* **Resolution mismatch** across venues: different sources, deadlines, time
+  zones, tie rules, "Other" or 50/50 fallback (`equal_split`). This is the #1 risk.
+* **Legging risk:** orders on two venues are not atomic. One leg can fill while
+  the other moves away.
+* **Cancellation and void rules:** a void can refund at a price that breaks the hedge.
+* **Capital lock-up and venue risk:** funds sit on two platforms until both settle.
+  Withdrawal fees apply (PredictIt 5%; on Polymarket, USDC on- and off-ramp costs).
+* **Fee schedule drift:** check `arb/fees.py` against current docs before going live.
+  The Polymarket formula matches published peak rates but has not been checked
+  against the docs.
+* **Access and legal:** international Polymarket blocks US persons. Polymarket US
+  is a separate, regulated venue with its own API. Kalshi requires KYC.
+  PredictIt caps positions at $850 per contract. Confirm what you can legally use
+  before adding any execution code.
+
+## Roadmap to live trading (not started)
+
+1. Run `paper` on a schedule for a few weeks and check settled paper trades
+   against actual resolutions (add a `settle` command).
+2. Build and maintain `data/pairs.json` (human-verified equivalences). Promote
+   tier B to paper trading.
+3. Add live executors: Kalshi signed REST (RSA-PSS) and Polymarket
+   `py-clob-client` (or the Polymarket US API). Use fill-or-kill orders, thinnest leg
+   first, auto-unwind on a partial fill, a re-check of the book just before sending,
+   per-trade and daily capital caps, and a kill switch.
+4. Switch to websocket order-book feeds. Real cross-venue gaps close in
+   seconds to minutes, so polling every 1.5 minutes will miss most of them.
+
+## Layout
+
+```
+arb/sources/   kalshi.py, polymarket.py, predictit.py   venue adapters (public data)
+arb/fees.py    per-venue fee models
+arb/engine.py  scenario-based worst-case evaluation + order-book sizing
+arb/strategies.py  no_basket / yes_basket / cross_pair generators
+arb/matching.py    cross-venue pair suggestions
+arb/scan.py    fetch -> screen -> verify pipeline
+arb/execution.py   DryRunExecutor (paper ledger); LiveExecutor deliberately disabled
+data/pairs.json    human-verified cross-venue pairs (empty)
+```

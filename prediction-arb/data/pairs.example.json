@@ -1,0 +1,12 @@
+[
+  {
+    "a_platform": "kalshi",
+    "a_id": "KXTIME-26-SAM",
+    "b_platform": "polymarket",
+    "b_id": "0x<conditionId>",
+    "invert": false,
+    "verified_by": "your initials",
+    "verified_on": "2026-11-08",
+    "why_equivalent": "Both resolve on TIME's 2026 Person of the Year announcement; same person; neither has a co-winner clause that differs."
+  }
+]
