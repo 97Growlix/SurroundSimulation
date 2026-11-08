@@ -31,16 +31,16 @@ class Underlying:
 
 
 REGISTRY: tuple[Underlying, ...] = (
-    Underlying("us_core_cpi_mom", 0.1, ("KXCPICORE", "KXECONSTATCPICORE"), r"^core cpi mom\b",
+    Underlying("us_core_cpi_mom", 0.1, ("KXCPICORE", "KXECONSTATCPICORE"), r"^core cpi (\(ex food (and|&) energy\) )?mom\b",
                "BLS CPI-U less food & energy, seasonally adjusted 1-month % change, one decimal",
                "release delay (e.g. shutdown) clauses differ between venues"),
-    Underlying("us_cpi_mom", 0.1, ("KXCPI", "KXECONSTATCPI"), r"^cpi mom\b",
+    Underlying("us_cpi_mom", 0.1, ("KXCPI", "KXECONSTATCPI"), r"^(cpi mom\b|\w+ inflation us - monthly$)",
                "BLS CPI-U all items, seasonally adjusted 1-month % change, one decimal",
                "release delay clauses differ"),
     Underlying("us_core_cpi_yoy", 0.1, ("KXCPICOREYOY", "KXECONSTATCORECPIYOY"), r"^core cpi yoy\b",
                "BLS CPI-U less food & energy, 12-month % change (not seasonally adjusted), one decimal",
                "release delay clauses differ"),
-    Underlying("us_cpi_yoy", 0.1, ("KXCPIYOY", "KXECONSTATCPIYOY"), r"^cpi yoy\b",
+    Underlying("us_cpi_yoy", 0.1, ("KXCPIYOY", "KXECONSTATCPIYOY"), r"^(cpi yoy\b|\w+ inflation us - annual$)",
                "BLS CPI-U all items, 12-month % change (not seasonally adjusted), one decimal",
                "release delay clauses differ"),
     Underlying("us_core_pce_mom", 0.1, ("KXPCECORE",), r"^core pce mom\b",

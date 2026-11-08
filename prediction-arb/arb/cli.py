@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 from datetime import datetime, timezone
 
 from .engine import Opportunity
@@ -57,6 +58,8 @@ def cfg_from(a) -> ScanConfig:
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="arb")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    sp = sub.add_parser("settle", help="resolve open paper trades against actual outcomes")
+    sp.add_argument("--ledger", default=str(DATA / "paper_ledger.jsonl"))
     for name in ("scan", "paper", "match"):
         p = sub.add_parser(name)
         p.add_argument("--min-apy", type=float, default=10.0, help="minimum annualised return, %%/yr")
@@ -73,6 +76,18 @@ def main(argv=None):
         p.add_argument("--paper-tiers", default="A",
                        help="tiers to paper-trade, e.g. 'A' or 'A,B' (B = registry-verified cross-venue bundles)")
     a = ap.parse_args(argv)
+    if a.cmd == "settle":
+        from .settle import settle_ledger
+        recs = settle_ledger(Path(a.ledger))
+        done = [r for r in recs if r.get("status") == "settled"]
+        print(f"{len(done)} settled / {len(recs) - len(done)} still open")
+        for r in done:
+            flag = "OK " if r["matched_expectation"] else "!! MISMATCH"
+            print(f"  {flag} {r['title'][:60]:60} cost ${r['cost'] + r['fees']:.2f} payout ${r['payout']:.2f} "
+                  f"P&L ${r['realized_profit']:+.2f}")
+        if done:
+            print(f"total realised P&L ${sum(r['realized_profit'] for r in done):+.2f}")
+        return
     cfg = cfg_from(a)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
