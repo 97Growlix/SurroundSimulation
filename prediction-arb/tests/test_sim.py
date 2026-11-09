@@ -73,3 +73,14 @@ def test_stale_polymarket_prices_are_not_traded():
     assert run(groups, sims, T0, T1, cfg)["executed"] == 0
     cfg = SimConfig(pm_half_spread=0, unlimited_depth=True, latency_hours=0, pm_sum_tolerance=10)
     assert run(groups, sims, T0, T1, cfg)["executed"] >= 1
+
+
+def test_volume_cap_limits_kalshi_leg():
+    groups, sims = setup()
+    k = sims[("kalshi", "K")]
+    k.v = [1.0] * len(k.times)               # one contract per hour traded
+    k.cumv = [float(i + 1) for i in range(len(k.times))]
+    cfg = SimConfig(pm_sum_tolerance=10, bankroll=10_000, pm_half_spread=0, unlimited_depth=True,
+                    latency_hours=0, replenish_hours=0, max_participation=0.5)
+    r = run(groups, sims, T0, T1, cfg)
+    assert all(t["qty"] <= 12 for t in r["trades"])   # <= 50% of <=24 contracts/day

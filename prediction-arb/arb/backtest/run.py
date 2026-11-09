@@ -20,9 +20,14 @@ SCENARIOS = [
     replace(BASE, label="Conservative (2c PM spread, half depth, 2h delay, 24h refill)", pm_half_spread=0.02,
             depth_kalshi=100, depth_pm=75, latency_hours=2, replenish_hours=24),
     replace(BASE, label="Kalshi-only (no cross-venue)", platforms=("kalshi",)),
+    replace(BASE, label="Volume-capped: <=25% of each Kalshi leg's last-24h volume", max_participation=0.25),
+    replace(BASE, label="Volume-capped 10% + conservative", max_participation=0.10, pm_half_spread=0.02,
+            depth_kalshi=100, depth_pm=75, latency_hours=2, replenish_hours=24),
     replace(BASE, label="Base, only lock capital if APY >= 50%", min_apy=0.5),
     replace(BASE, label="Base, only lock capital if APY >= 200%", min_apy=2.0),
-] + [replace(BASE, label=f"Base, bankroll ${b:,}", bankroll=float(b)) for b in (1_000, 10_000, 100_000)]
+] + [replace(BASE, label=f"Base, bankroll ${b:,}", bankroll=float(b)) for b in (1_000, 10_000, 100_000)] \
+  + [replace(BASE, label=f"Volume-capped 25%, bankroll ${b:,}", bankroll=float(b), max_participation=0.25)
+     for b in (1_000, 10_000, 100_000)]
 
 
 _STATE = {}

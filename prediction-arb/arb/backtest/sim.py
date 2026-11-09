@@ -49,6 +49,10 @@ class SimConfig:
     # duplicates; their "resolution" is not a real outcome.
     pm_early_close_days: float = 2.0
     unlimited_depth: bool = False
+    # cap each Kalshi leg at this fraction of the contracts that actually traded in
+    # that market over the previous 24h (None = no cap). Polymarket history has no
+    # volume, so its legs stay depth-model only.
+    max_participation: float | None = None
     platforms: tuple = ("kalshi", "polymarket")
     label: str = ""
 
@@ -61,6 +65,15 @@ class SimMarket:
     times: list[int] = field(default_factory=list)
     a: list = field(default_factory=list)   # kalshi yes ask | pm price
     b: list = field(default_factory=list)   # kalshi yes bid | None
+    v: list = field(default_factory=list)   # kalshi hourly volume
+    cumv: list = field(default_factory=list)
+
+    def volume_24h(self, t: int) -> float:
+        if not self.cumv:
+            return 0.0
+        i = bisect.bisect_right(self.times, t) - 1
+        j = bisect.bisect_right(self.times, t - 86400) - 1
+        return (self.cumv[i] if i >= 0 else 0.0) - (self.cumv[j] if j >= 0 else 0.0)
 
 
 def load(raw_path: Path):
@@ -75,8 +88,11 @@ def load(raw_path: Path):
             res = (m.get("result") or "").lower()
             sm = SimMarket(bm, 1.0 if res == "yes" else 0.0 if res == "no" else None,
                            int(parse_ts(m["close"]).timestamp()))
+            run_v = 0.0
             for c in sorted(m["candles"], key=lambda c: c["t"]):
                 sm.times.append(c["t"]); sm.a.append(c["ask"]); sm.b.append(c["bid"])
+                run_v += c.get("vol") or 0.0
+                sm.v.append(c.get("vol") or 0.0); sm.cumv.append(run_v)
             sims[("kalshi", bm.market_id)] = sm
             ms.append(bm)
         events["kalshi"].append(Event("kalshi", ev["event_id"], ev["title"], ms,
@@ -259,11 +275,16 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
                 continue
             # add contracts one at a time while the marginal bundle stays profitable
             qty, spent, legcost = 0, 0.0, [0.0] * len(exec_legs)
+            qcap = math.inf
+            if cfg.max_participation is not None:
+                for sm, *_ in exec_legs:
+                    if sm.bm.platform == "kalshi":
+                        qcap = min(qcap, math.floor(cfg.max_participation * sm.volume_24h(te)))
             while True:
                 marg = [_leg_marginal(sm, side, ask, c0, qty, cfg) for sm, side, ask, c0, _ in exec_legs]
                 mfee = [sm.bm.fee.taker_fee(p, 1, round_up=False) for (sm, *_), p in zip(exec_legs, marg)]
                 unit = sum(marg) + sum(mfee)
-                if unit > 1 - cfg.min_edge or spent + unit > cash or any(p >= 1 for p in marg):
+                if unit > 1 - cfg.min_edge or spent + unit > cash or any(p >= 1 for p in marg) or qty >= qcap:
                     break
                 qty += 1
                 spent += unit
