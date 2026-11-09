@@ -25,6 +25,16 @@ SCENARIOS = [
 ] + [replace(BASE, label=f"Base, bankroll ${b:,}", bankroll=float(b)) for b in (1_000, 10_000, 100_000)]
 
 
+_STATE = {}
+
+
+def _run_one(cfg):
+    if not _STATE:
+        _STATE["d"] = load(OUT / "raw.json")
+    _, groups, sims = _STATE["d"]
+    return run(groups, sims, START, END, cfg)
+
+
 def main():
     raw, groups, sims = load(OUT / "raw.json")
     venues = Counter()
@@ -33,10 +43,10 @@ def main():
     print(f"{len(groups)} underlying/period groups; {len(sims)} markets with history")
     for (uid, v), n in sorted(venues.items()):
         print(f"   {uid:18} {'+'.join(v):18} {n} periods")
-    results = []
-    for cfg in SCENARIOS:
-        r = run(groups, sims, START, END, cfg)
-        results.append(r)
+    from concurrent.futures import ProcessPoolExecutor
+    with ProcessPoolExecutor() as ex:
+        results = list(ex.map(_run_one, SCENARIOS))
+    for cfg, r in zip(SCENARIOS, results):
         print(f"\n== {cfg.label}: ${cfg.bankroll:,.0f} -> ${r['final']:,.2f} "
               f"({r['return'] * 100:+.2f}% in 6 mo, {r['annualized'] * 100:+.1f}%/yr) | "
               f"{r['executed']} trades, {r['vanished']} vanished before execution, "

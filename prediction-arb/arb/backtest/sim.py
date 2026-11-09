@@ -136,6 +136,15 @@ def _leg_marginal(sm: SimMarket, side: str, ask: float, consumed: float, k: int,
 
 def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
     t0, t1 = int(start.timestamp()), int(end.timestamp())
+    solve_cache: dict = {}
+    # each group is only tradable between its first price and its last close
+    windows = {}
+    for gkey, items in groups.items():
+        sm = [sims[(it.market.platform, it.market.market_id)] for it in items
+              if it.market.platform in cfg.platforms]
+        ts = [x.times[0] for x in sm if x.times]
+        if len(ts) >= 2:
+            windows[gkey] = (min(ts), max(x.close_ts for x in sm))
     cash = cfg.bankroll
     positions: list[Position] = []
     consumed: dict[tuple, tuple[float, int]] = {}   # (platform,id,side) -> (amount, ts)
@@ -156,6 +165,9 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
         # find candidate bundles at time t
         cands = []
         for gkey, items in groups.items():
+            w = windows.get(gkey)
+            if not w or not (w[0] <= t < w[1]):
+                continue
             live = []
             for it in items:
                 if it.market.platform not in cfg.platforms:
@@ -168,7 +180,10 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
                 live.append(type(it)(bm, it.interval))
             if len(live) < 2:
                 continue
-            sol = solve_cover(live)
+            ck = (gkey, tuple((it.market.market_id, it.market.yes_ask, it.market.no_ask) for it in live))
+            if ck not in solve_cache:
+                solve_cache[ck] = solve_cover(live)
+            sol = solve_cache[ck]
             if not sol or sol[2] > 1 - cfg.min_edge:
                 continue
             legs, outcomes, unit = sol
