@@ -140,6 +140,77 @@ Kalshi series tickers and a Polymarket title regex. Events whose bucket labels
 can't be parsed cleanly, or whose parsed buckets overlap, are skipped rather
 than guessed.
 
+## Six-month backtest (May 8 - Nov 8, 2026)
+
+`python -m arb.backtest.collect 2026-05-08 2026-11-08` downloads every settled
+registry market: 60 Kalshi events with hourly best bid/ask/volume candles, and
+32 Polymarket events with hourly prices and final outcomes (1,083 markets in
+total). `python -m arb.backtest.run` then replays the range-covering strategy
+hour by hour with a cash constraint, and pays out from the venues' **actual**
+results. Across all 14 scenarios, no bundle ever paid less than its guaranteed
+minimum.
+
+How limited liquidity and moving the line are modelled (`arb/backtest/sim.py`):
+
+| Control | Base setting | Why |
+|---|---|---|
+| Real asks (Kalshi), price + spread (Polymarket) | PM +1c | Polymarket history has one price per hour, and live median spread is 1c |
+| Order-book depth staircase | 200 (K) / 150 (PM) contracts per 1c level | calibrated from live books; buying more walks the price up |
+| Liquidity refill | consumed depth returns over 6h | hitting the same market again costs more ("moving the line") |
+| Execution delay | detect at hour t, fill at t+1h prices, only if still profitable | gaps that close fast are not counted |
+| Volume cap (optional) | <=25% / 10% of each Kalshi leg's actual last-24h volume | thin markets can't absorb size |
+| Stale-price guard | skip a PM event when its bucket prices don't sum to ~1 | untraded buckets create phantom gaps |
+| Abandoned markets | drop PM events closed >2 days before their end | a duplicate Fed event otherwise produced fake losses |
+
+Results ("guaranteed" = profit locked in at entry; "windfall" = extra paid when
+two legs both won):
+
+| Scenario | $100 became | guaranteed | windfall |
+|---|---|---|---|
+| Frictionless | $134.64 | +$34.65 | $0 |
+| **Base (realistic)** | **$150.00** | **+$50.01** | $0 |
+| Conservative (2c spread, half depth, 2h delay, 24h refill) | $131.26 | +$31.26 | $0 |
+| Kalshi-only | $151.62 | +$51.62 | $0 |
+| Volume-capped 25% | $247.67 | +$54.67 | +$93.00 |
+| Volume-capped 10% + conservative | $194.90 | +$26.89 | +$68.00 |
+| Base, lock capital only if APY >= 50% (chosen with hindsight) | $190.43 | +$90.44 | $0 |
+
+| Bankroll (base) | Guaranteed return over 6 months |
+|---|---|
+| $100 | 50% |
+| $1,000 | 31% |
+| $10,000 | 20% |
+| $100,000 | 8% (5% with the 25% volume cap) |
+
+Reading the results:
+* The strategy found real, repeated inconsistencies, mostly around monthly
+  CPI/PCE releases: Kalshi's threshold vs exact-value ladders, and Kalshi vs
+  Polymarket buckets. About half of base-case profit was Kalshi-internal, half
+  cross-venue.
+* With $100, **capital lock-up dominates**. One Fed bundle bought in May tied up
+  the whole bankroll until September. Results swing by tens of percent with the
+  order trades happen in, which is why "frictionless" beat neither "base" nor the hurdle runs.
+* Capacity is small. Percentage returns fall from 50% to 8% as the bankroll
+  grows from $100 to $100k, because the mispriced size is limited.
+* Remaining optimism in the model: hourly data (fill sizes at the quoted price
+  are assumed, not observed), thin Kalshi exact-value markets, and Polymarket
+  depth that can't be checked historically. Six months is a small sample.
+
+## Live in-game sports (recorded 2026-11-08, 23:48-01:48 UTC)
+
+`python -m arb.sports 60` matches Kalshi/Polymarket game-winner markets (NFL,
+NBA, NHL, college football) by league, date and team abbreviations, and polls
+both books every ~15s. The rules match (overtime counts; an NFL tie pays 50/50 on
+both venues), apart from cancelled games (Kalshi "fair price" vs Polymarket 50/50).
+
+Over 2,932 snapshots of 13 games, the cheapest cross-venue bundle cost a median of
+**$1.022** after fees ($1.032 in close games, $1.008 in lopsided ones). Only 9
+snapshots (0.3%) were under $1, and none lasted to the next poll. The one
+meaningful gap (Penguins-Ducks, $0.972) was worth about $1.30 at 100 contracts.
+Conclusion: in-play cross-venue gaps in major leagues are rare, tiny and gone
+within seconds. That niche needs streaming feeds and very fast execution, and
+is low-yield even then.
+
 ## Risks that "risk-free" does not remove
 
 * **Resolution mismatch** across venues: different sources, deadlines, time
