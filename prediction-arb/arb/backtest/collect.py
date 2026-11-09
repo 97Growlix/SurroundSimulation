@@ -35,6 +35,19 @@ def _f(x):
         return None
 
 
+def _patient(fn, tries: int = 5, pause: float = 60.0):
+    """Retry through sustained rate limiting (pause a minute between bursts)."""
+    import time
+    for i in range(tries):
+        try:
+            return fn()
+        except RuntimeError as ex:
+            if i == tries - 1:
+                raise
+            log(f"    throttled ({ex}); pausing {pause:.0f}s")
+            time.sleep(pause)
+
+
 def kalshi_candles(series: str, ticker: str, start: int, end: int, historical: bool) -> list[dict]:
     path = f"/historical/markets/{ticker}/candlesticks" if historical else \
         f"/series/{series}/markets/{ticker}/candlesticks"
@@ -43,7 +56,7 @@ def kalshi_candles(series: str, ticker: str, start: int, end: int, historical: b
     while s < end:
         e = min(end, s + 3600 * 4000)
         try:
-            d = get_json(K + path, {"start_ts": s, "end_ts": e, "period_interval": 60})
+            d = _patient(lambda: get_json(K + path, {"start_ts": s, "end_ts": e, "period_interval": 60}))
         except RuntimeError as ex:
             log(f"    candles failed {ticker}: {ex}")
             break
@@ -69,13 +82,13 @@ def collect_kalshi(start: datetime, end: datetime) -> list[dict]:
                 p = {"series_ticker": series, "status": "settled", "with_nested_markets": "true", "limit": 100}
                 if cursor:
                     p["cursor"] = cursor
-                d = get_json(K + "/events", p)
+                d = _patient(lambda: get_json(K + "/events", p))
                 for ev in d.get("events", []):
                     mk = ev.get("markets") or []
                     if not mk:
                         # markets settled before the historical cutoff live in a separate archive
-                        mk = get_json(K + "/historical/markets", {"event_ticker": ev["event_ticker"],
-                                                                   "limit": 200}).get("markets", [])
+                        mk = _patient(lambda: get_json(K + "/historical/markets", {
+                            "event_ticker": ev["event_ticker"], "limit": 200}).get("markets", []))
                     closes = [parse_ts(m.get("close_time")) for m in mk if m.get("close_time")]
                     if not closes or not (start <= max(closes) <= end):
                         continue
