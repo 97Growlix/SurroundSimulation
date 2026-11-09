@@ -44,7 +44,7 @@ def _market(m: dict, ev: dict) -> BinaryMarket | None:
         url=f"https://kalshi.com/markets/{ev.get('series_ticker', '').lower()}",
         rules=(m.get("rules_primary") or "") + " " + (m.get("rules_secondary") or ""),
         fee=fees.KALSHI,
-        book_ref={"ticker": m["ticker"]},
+        book_ref={"ticker": m["ticker"], "trading_close": m.get("close_time")},
         volume=_f(m.get("volume_fp")) or 0.0,
         strike={"type": m.get("strike_type"), "floor": m.get("floor_strike"), "cap": m.get("cap_strike")},
     )
@@ -99,3 +99,14 @@ def orderbook(ticker: str) -> dict[str, list[tuple[float, float]]]:
         "yes": sorted(((round(1 - p, 4), s) for p, s in no_bids), key=lambda x: x[0]),
         "no": sorted(((round(1 - p, 4), s) for p, s in yes_bids), key=lambda x: x[0]),
     }
+
+
+def orderbook_full(ticker: str) -> dict[str, list[tuple[float, float]]]:
+    """Asks (cheapest first) and bids (best first) for both sides."""
+    d = get_json(f"{BASE}/markets/{ticker}/orderbook")
+    ob = d.get("orderbook_fp") or {}
+    yes_bids = sorted(((float(p), float(s)) for p, s in ob.get("yes_dollars") or []), key=lambda x: -x[0])
+    no_bids = sorted(((float(p), float(s)) for p, s in ob.get("no_dollars") or []), key=lambda x: -x[0])
+    return {"yes_bid": yes_bids, "no_bid": no_bids,
+            "yes": sorted(((round(1 - p, 4), s) for p, s in no_bids), key=lambda x: x[0]),
+            "no": sorted(((round(1 - p, 4), s) for p, s in yes_bids), key=lambda x: x[0])}

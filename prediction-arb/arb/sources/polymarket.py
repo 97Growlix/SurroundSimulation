@@ -112,3 +112,18 @@ def orderbooks(token_ids: list[str]) -> dict[str, list[tuple[float, float]]]:
             asks = [(float(a["price"]), float(a["size"])) for a in book.get("asks", [])]
             out[book.get("asset_id")] = sorted(asks, key=lambda x: x[0])
     return out
+
+
+def books_full(token_ids: list[str]) -> dict[str, dict]:
+    """{token: {'asks': [...cheapest first], 'bids': [...best first]}}"""
+    out: dict[str, dict] = {}
+    for i in range(0, len(token_ids), 50):
+        chunk = token_ids[i:i + 50]
+        d = get_json(f"{CLOB}/books", method="POST", json_body=[{"token_id": t} for t in chunk])
+        for book in d or []:
+            out[book.get("asset_id")] = {
+                "asks": sorted(((float(a["price"]), float(a["size"])) for a in book.get("asks", [])),
+                               key=lambda x: x[0]),
+                "bids": sorted(((float(b["price"]), float(b["size"])) for b in book.get("bids", [])),
+                               key=lambda x: -x[0])}
+    return out

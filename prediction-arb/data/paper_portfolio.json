@@ -1,0 +1,126 @@
+{
+ "start": "2026-11-09T14:50:23.071828+00:00",
+ "bankroll": 100.0,
+ "cash": 0.8986081525000031,
+ "positions": [
+  {
+   "id": "d0466851ee",
+   "opened": "2026-11-09T14:51:36.551826+00:00",
+   "title": "us_cpi_mom 2026-10",
+   "tier": "B",
+   "qty": 50,
+   "cost": 49.0,
+   "fees": 0.4625,
+   "guaranteed": 50.0,
+   "apy": 2.0014425756548713,
+   "settle_after": "2026-11-12T04:59:00+00:00",
+   "risk": 0.008,
+   "status": "open",
+   "legs": [
+    {
+     "platform": "kalshi",
+     "market_id": "KXCPI-26OCT-T0.3",
+     "side": "no",
+     "outcome": "Above 0.3%",
+     "avg_price": 0.87,
+     "book_ref": {
+      "ticker": "KXCPI-26OCT-T0.3",
+      "trading_close": "2026-11-10T13:29:00Z"
+     },
+     "fee_kind": "kalshi",
+     "fee_rate": 0.07,
+     "fee_exp": 1.0
+    },
+    {
+     "platform": "kalshi",
+     "market_id": "KXCPI-26OCT-T0.4",
+     "side": "yes",
+     "outcome": "Above 0.4%",
+     "avg_price": 0.01,
+     "book_ref": {
+      "ticker": "KXCPI-26OCT-T0.4",
+      "trading_close": "2026-11-10T13:29:00Z"
+     },
+     "fee_kind": "kalshi",
+     "fee_rate": 0.07,
+     "fee_exp": 1.0
+    },
+    {
+     "platform": "polymarket",
+     "market_id": "0x84a5755b55c816fe8a86249e850687bc42e7ef66eb7166afcadb4eca36f51da0",
+     "side": "yes",
+     "outcome": "0.4%",
+     "avg_price": 0.1,
+     "book_ref": {
+      "yes": "3601670517881286998072353768095201355739678973139715259240482789336310814577",
+      "no": "16548660606951693577929781356019879497220235607453129252266389700136508675777",
+      "neg_risk": true
+     },
+     "fee_kind": "polymarket",
+     "fee_rate": 0.05,
+     "fee_exp": 1.0
+    }
+   ]
+  },
+  {
+   "id": "271dccfad6",
+   "opened": "2026-11-09T14:51:36.551958+00:00",
+   "title": "us_core_cpi_mom 2026-10",
+   "tier": "B",
+   "qty": 50,
+   "cost": 49.05,
+   "fees": 0.5888918475,
+   "guaranteed": 50.0,
+   "apy": 1.0898484564244932,
+   "settle_after": "2026-11-12T04:59:00+00:00",
+   "risk": 0.008,
+   "status": "open",
+   "legs": [
+    {
+     "platform": "kalshi",
+     "market_id": "KXCPICORE-26OCT-T0.1",
+     "side": "yes",
+     "outcome": "Above 0.1%",
+     "avg_price": 0.81,
+     "book_ref": {
+      "ticker": "KXCPICORE-26OCT-T0.1",
+      "trading_close": "2026-11-10T13:25:00Z"
+     },
+     "fee_kind": "kalshi",
+     "fee_rate": 0.07,
+     "fee_exp": 1.0
+    },
+    {
+     "platform": "polymarket",
+     "market_id": "0x8ed782ce0b5a2c54e119ada9d2a4be36b5fd1641852951376864878c3d38e79a",
+     "side": "yes",
+     "outcome": "\u22640.0%",
+     "avg_price": 0.021,
+     "book_ref": {
+      "yes": "107217366828933011875548708223929608574524215479596511277447623496226927174067",
+      "no": "79651449195803598255973519657771103068478994615569476703685255956262440935555",
+      "neg_risk": true
+     },
+     "fee_kind": "polymarket",
+     "fee_rate": 0.05,
+     "fee_exp": 1.0
+    },
+    {
+     "platform": "polymarket",
+     "market_id": "0x5e2ce1a717901638ea0a4bb5ea83189115cd5a64e625c0c5f64e4276e9b3169a",
+     "side": "yes",
+     "outcome": "0.1%",
+     "avg_price": 0.15,
+     "book_ref": {
+      "yes": "49185376312594045900626620869683680032848921463987208984938128483202786724296",
+      "no": "33562124988950208589920579920496086144949789506788130965887350172008622684553",
+      "neg_risk": true
+     },
+     "fee_kind": "polymarket",
+     "fee_rate": 0.05,
+     "fee_exp": 1.0
+    }
+   ]
+  }
+ ]
+}

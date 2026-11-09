@@ -58,6 +58,14 @@ def cfg_from(a) -> ScanConfig:
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="arb")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    rp = sub.add_parser("releases", help="upcoming release calendar for registry underlyings")
+    wp = sub.add_parser("watch", help="release-focused paper trading loop")
+    wp.add_argument("--bankroll", type=float, default=100.0)
+    wp.add_argument("--min-apy", type=float, default=50.0, help="hurdle for locking capital, %%/yr")
+    wp.add_argument("--max-trade-frac", type=float, default=0.5)
+    wp.add_argument("--switch-margin", type=float, default=50.0, help="APY points a new bundle must beat a held one by")
+    wp.add_argument("--min-profit", type=float, default=0.25)
+    wp.add_argument("--cycles", type=int, default=None)
     sp = sub.add_parser("settle", help="resolve open paper trades against actual outcomes")
     sp.add_argument("--ledger", default=str(DATA / "paper_ledger.jsonl"))
     for name in ("scan", "paper", "match"):
@@ -76,6 +84,20 @@ def main(argv=None):
         p.add_argument("--paper-tiers", default="A",
                        help="tiers to paper-trade, e.g. 'A' or 'A,B' (B = registry-verified cross-venue bundles)")
     a = ap.parse_args(argv)
+    if a.cmd == "releases":
+        from .watch import fetch_registry_events, release_calendar
+        now = datetime.now(timezone.utc)
+        for r in release_calendar(fetch_registry_events()):
+            if r["release"] < now:
+                continue
+            hrs = (r["release"] - now).total_seconds() / 3600
+            print(f"  {r['release']:%a %b %d %H:%M} UTC  (in {hrs:5.1f}h)  {r['underlying']:20} "
+                  f"{'+'.join(r['venues']):18} {r['markets']} markets")
+        return
+    if a.cmd == "watch":
+        from .watch import watch
+        watch(a.bankroll, a.min_apy / 100, a.max_trade_frac, a.switch_margin / 100, a.min_profit, a.cycles)
+        return
     if a.cmd == "settle":
         from .settle import settle_ledger
         recs = settle_ledger(Path(a.ledger))

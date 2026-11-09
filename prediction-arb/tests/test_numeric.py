@@ -97,3 +97,52 @@ def test_overlapping_buckets_rejected():
     from arb.numeric import _validate_buckets
     assert not _validate_buckets([Interval(1, 3), Interval(3, 5)])
     assert _validate_buckets([Interval(-INF, 0), Interval(1, 1), Interval(2, INF)])
+
+
+def test_choose_prefers_lower_risk_when_expected_is_similar():
+    from arb.numeric import choose_cover
+    # Same-venue cover (Kalshi ">0.1" YES + Kalshi exact "<=0.1" style legs) vs cross-venue cover
+    # with nearly identical cost: the chooser should take the single-venue one.
+    k_above = km("K-T0.1", "greater", 0.1, label="Above 0.1%", yes=0.86, no=0.15)
+    k_le = km("K-L0.1", "less_or_equal", cap=0.1, label="<=0.1%", yes=0.115, no=0.9)
+    items = [Priced(k_above, Interval(2, INF)), Priced(k_le, Interval(-INF, 1))]
+    for lab, y, n in [("≤0.0%", .02, .995), ("0.1%", .09, .97), ("0.2%", .48, .54), ("0.3%", .35, .67),
+                      ("0.4%", .09, .93), ("0.5%", .01, .997), ("0.6%+", .003, .999)]:
+        items.append(Priced(pm(lab, y, n), polymarket_interval(lab, CPI, False)))
+    pick, alts, _ = choose_cover(items, CPI)
+    assert len(alts) >= 2
+    assert {it.market.platform for it, _ in pick.legs} == {"kalshi"}     # 0.975 (2 legs, 1 venue) beats 0.97 (3 legs, 2 venues) risk-adjusted
+    assert pick.risk < max(a.risk for a in alts)
+
+
+def test_implied_distribution_sums_to_one_and_matches_buckets():
+    from arb.numeric import implied_distribution
+    items = [Priced(pm(l, y, 1 - y + 0.01), polymarket_interval(l, CPI, False))
+             for l, y in [("≤0.0%", .05), ("0.1%", .15), ("0.2%", .5), ("0.3%", .25), ("0.4%+", .05)]]
+    outcomes = list(range(-1, 6))
+    p = implied_distribution(items, outcomes)
+    assert abs(p.sum() - 1) < 1e-9 and p[outcomes.index(2)] == pytest.approx(0.5, abs=0.02)
+
+
+@pytest.mark.parametrize("plat,eid,title,close,want", [
+    ("kalshi", "KXUSPPIYOY-26NOV13", "PPI YoY in October", "2026-11-13", ("M", 2026, 10)),   # ticker = release date
+    ("polymarket", "1", "PPI YoY - October 2026", "2026-11-14", ("M", 2026, 10)),
+    ("kalshi", "KXJOLTSOPEN-26DEC01", "US job openings in October", "2026-12-01", ("M", 2026, 10)),
+    ("kalshi", "KXCPI-26DEC", "CPI in December", "2027-01-13", ("M", 2026, 12)),             # year rolls back
+    ("polymarket", "4", "Fed Decision in December?", "2026-12-09", ("M", 2026, 12)),
+    ("polymarket", "5", "Fed Decision in January?", "2027-01-28", ("M", 2027, 1)),      # "decision" != "dec"
+    ("kalshi", "KXFEDDECISION-27MAR", "Fed decision in Mar 2027?", "2027-03-17", ("M", 2027, 3)),
+    ("kalshi", "KXCPICORE-26OCT", "Core CPI in October", "2026-11-10", ("M", 2026, 10)),
+])
+def test_period_uses_reference_month(plat, eid, title, close, want):
+    m = pm("x")
+    m.close_time = datetime.fromisoformat(close).replace(tzinfo=timezone.utc)
+    assert period_of(Event(plat, eid, title, []), m) == want
+
+
+def test_daily_period_for_gas():
+    gas = next(u for u in REGISTRY if u.id == "us_gas_daily")
+    m = pm("x")
+    m.close_time = datetime(2026, 11, 9, 15, tzinfo=timezone.utc)
+    assert period_of(Event("kalshi", "KXAAAGASD-26NOV10", "US gas prices tomorrow", []), m, "D") == ("D", 2026, 11, 10)
+    assert period_of(Event("polymarket", "9", "Gas prices on November 9?", []), m, gas.period) == ("D", 2026, 11, 9)

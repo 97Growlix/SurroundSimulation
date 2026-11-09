@@ -7,28 +7,29 @@ from dataclasses import replace
 from datetime import datetime, timezone
 
 from .collect import OUT
-from .sim import SimConfig, load, run
+from .sim import SimConfig, load, run  # noqa: F401
 
 START = datetime(2026, 5, 8, tzinfo=timezone.utc)
 END = datetime(2026, 11, 8, tzinfo=timezone.utc)
 
-BASE = SimConfig(label="Base (realistic)")
+V1 = SimConfig(label="v1: cheapest cover, hold to settlement, no hurdle")
+NEW = replace(V1, label="v2: 50% hurdle + early exit/switch + risk chooser + 50% max per trade",
+              min_apy=0.5, early_exit=True, risk_chooser=True, max_trade_frac=0.5)
 SCENARIOS = [
-    replace(BASE, label="Frictionless (mid prices, infinite depth, no delay)", pm_half_spread=0.0,
-            unlimited_depth=True, latency_hours=0, replenish_hours=0, min_edge=0.001),
-    BASE,
-    replace(BASE, label="Conservative (2c PM spread, half depth, 2h delay, 24h refill)", pm_half_spread=0.02,
+    V1,
+    replace(V1, label="v1 + 50% hurdle", min_apy=0.5),
+    replace(V1, label="v1 + 50% hurdle + early exit/switch", min_apy=0.5, early_exit=True),
+    replace(V1, label="v1 + 50% hurdle + early exit/switch + risk chooser", min_apy=0.5, early_exit=True,
+            risk_chooser=True),
+    NEW,
+    replace(NEW, label="v2 + volume cap 25%", max_participation=0.25),
+    replace(NEW, label="v2 + volume cap 10% + conservative", max_participation=0.10, pm_half_spread=0.02,
             depth_kalshi=100, depth_pm=75, latency_hours=2, replenish_hours=24),
-    replace(BASE, label="Kalshi-only (no cross-venue)", platforms=("kalshi",)),
-    replace(BASE, label="Volume-capped: <=25% of each Kalshi leg's last-24h volume", max_participation=0.25),
-    replace(BASE, label="Volume-capped 10% + conservative", max_participation=0.10, pm_half_spread=0.02,
-            depth_kalshi=100, depth_pm=75, latency_hours=2, replenish_hours=24),
-    replace(BASE, label="Base, only lock capital if APY >= 50%", min_apy=0.5),
-    replace(BASE, label="Base, only lock capital if APY >= 200%", min_apy=2.0),
-] + [replace(BASE, label=f"Base, bankroll ${b:,}", bankroll=float(b)) for b in (1_000, 10_000, 100_000)] \
-  + [replace(BASE, label=f"Volume-capped 25%, bankroll ${b:,}", bankroll=float(b), max_participation=0.25)
+    replace(NEW, label="v2 original underlyings only", platforms=("kalshi", "polymarket")),
+] + [replace(NEW, label=f"v2 + volume cap 25%, bankroll ${b:,}", bankroll=float(b), max_participation=0.25)
      for b in (1_000, 10_000, 100_000)]
-
+ORIGINAL = {"us_core_cpi_mom", "us_cpi_mom", "us_core_cpi_yoy", "us_cpi_yoy", "us_core_pce_mom",
+            "us_gdp_q_saar", "fed_decision_bps"}
 
 _STATE = {}
 
@@ -37,6 +38,8 @@ def _run_one(cfg):
     if not _STATE:
         _STATE["d"] = load(OUT / "raw.json")
     _, groups, sims = _STATE["d"]
+    if cfg.label == "v2 original underlyings only":
+        groups = {k: v for k, v in groups.items() if k[0] in ORIGINAL}
     return run(groups, sims, START, END, cfg)
 
 
@@ -57,8 +60,13 @@ def main():
               f"{r['executed']} trades, {r['vanished']} vanished before execution, "
               f"{len(r['mismatches'])} worst-case violations")
     (OUT / "results.json").write_text(json.dumps(results, default=str))
-    base = results[1]
-    print("\nBase-case trades:")
+    for r in results:
+        g = sum(x["guaranteed_min"] - x["cost"] for x in r["trades"] if not x["exited_early"])
+        w = sum(x["pnl"] for x in r["trades"]) - g
+        ex = sum(1 for x in r["trades"] if x["exited_early"])
+        print(f"   {r['config']['label'][:70]:70} early exits {ex:4}  held-to-settle guaranteed ${g:,.2f}  other ${w:,.2f}")
+    base = results[4]
+    print("\nv2 trades ($100):")
     for x in base["trades"]:
         print(f"  {x['opened'][:13]} {x['group'][:34]:34} qty {x['qty']:4} cost ${x['cost']:7.2f} "
               f"-> ${x['payout']:7.2f}  P&L ${x['pnl']:+6.2f}  | {'; '.join(x['legs'])[:110]}")

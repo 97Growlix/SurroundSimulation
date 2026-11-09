@@ -45,12 +45,12 @@ def _tick(v: float, step: float) -> int:
 
 # ---------------------------------------------------------------- parsing
 
-_FED = [
-    (re.compile(r"cut\s*>\s*25|50\+?\s*bps?\s*decrease"), -INF, -2),
-    (re.compile(r"cut\s*25|^25\s*bps?\s*decrease"), -1, -1),
+_FED = [   # order matters: "more than 25" before plain "25"
+    (re.compile(r"cut\s*(>|more than)\s*25|50\+?\s*bps?\s*decrease"), -INF, -2),
+    (re.compile(r"cut\s*(1\s*-\s*)?25|^25\s*bps?\s*decrease"), -1, -1),
     (re.compile(r"maintain|no change|hold"), 0, 0),
-    (re.compile(r"hike\s*>\s*25|50\+?\s*bps?\s*increase"), 2, INF),
-    (re.compile(r"hike\s*25|^25\+?\s*bps?\s*increase"), 1, 1),
+    (re.compile(r"hike\s*(>|more than)\s*25|50\+?\s*bps?\s*increase"), 2, INF),
+    (re.compile(r"hike\s*(1\s*-\s*)?25|^25\+?\s*bps?\s*increase"), 1, 1),
 ]
 
 
@@ -95,6 +95,9 @@ _N = r"(-?\d+(?:\.\d+)?)"
 def polymarket_interval(label: str, u: Underlying, half_open_upper: bool) -> Interval | None:
     """Parse bucket labels like '<=0.0%', '0.1%', '0.6%+', '2.0-2.5%', '<1.5%', '>2.5%'."""
     l = label.lower().replace("−", "-").replace("–", "-").replace("—", "-").replace(" ", "")
+    l = l.replace("$", "").replace(",", "")
+    if u.step < 0.01:                       # JOLTS-style "7.2M" labels
+        l = re.sub(r"(\d)m\b", r"\1", l).replace("m+", "+").replace("m", "")
     s = u.step
     if (fi := _fed_interval(label, s)):
         return fi
@@ -108,8 +111,13 @@ def polymarket_interval(label: str, u: Underlying, half_open_upper: bool) -> Int
     if (mm := re.fullmatch(rf">{_N}%?", l)):
         return Interval(_tick(mm.group(1), s) + 1, INF)
     if (mm := re.fullmatch(rf"{_N}%?(?:-|to){_N}%?", l)):
-        lo, hi = _tick(mm.group(1), s), _tick(mm.group(2), s)
-        return Interval(lo, hi - 1 if half_open_upper else hi)
+        lo_v, hi_v = float(mm.group(1)), float(mm.group(2))
+        lo = math.ceil(lo_v / s - 1e-6)
+        if half_open_upper:
+            hi = math.ceil(hi_v / s - 1e-6) - 1      # [lo, hi)
+        else:
+            hi = math.floor(hi_v / s + 1e-6)         # [lo, hi], e.g. $4.0000-4.0099 -> 4.000..4.009
+        return Interval(lo, hi)
     if (mm := re.fullmatch(rf"{_N}%?", l)):
         t = _tick(mm.group(1), s)
         return Interval(t, t)
@@ -124,23 +132,40 @@ def _validate_buckets(ivs: list[Interval]) -> bool:
 
 # ---------------------------------------------------------------- periods
 
-def period_of(ev: Event, m: BinaryMarket) -> tuple | None:
+_FULLMON = r"(january|february|march|april|may|june|july|august|september|october|november|december)"
+
+
+def period_of(ev: Event, m: BinaryMarket, gran: str = "M") -> tuple | None:
     t = ev.title.lower()
+    if gran == "D":
+        if ev.platform == "kalshi" and (k := re.search(r"-(\d\d)([A-Z]{3})(\d\d)$", ev.event_id)):
+            if k.group(2).lower() in _MON:
+                return ("D", 2000 + int(k.group(1)), _MON[k.group(2).lower()], int(k.group(3)))
+        if (mm := re.search(_FULLMON + r"\s+(\d{1,2})\b(?:,?\s*(20\d\d))?", t)) and m.close_time:
+            mon, day = _MON[mm.group(1)[:3]], int(mm.group(2))
+            y = int(mm.group(3)) if mm.group(3) else m.close_time.year
+            if not mm.group(3) and mon == 12 and m.close_time.month == 1:
+                y -= 1
+            return ("D", y, mon, day)
+        return None
     if (q := re.search(r"\bq([1-4])\s*(20\d\d)", t)):
         return ("Q", int(q.group(2)), int(q.group(1)))
-    if (mm := re.search(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(20\d\d)\b", t)):
-        return ("M", int(mm.group(2)), _MON[mm.group(1)])
+    # Reference month from the TITLE first: Kalshi tickers are sometimes dated by the
+    # release date (PPI "...-26NOV13" is October data), titles name the data month.
+    # whole month words only ("decision" must not read as "dec")
+    mm = re.search(r"\b(january|february|march|april|may|june|july|august|september|october|november|december"
+                   r"|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b\.?(?:\s+(20\d\d))?", t)
+    if mm:
+        mon = _MON[mm.group(1)[:3]]
+        if mm.group(2):
+            return ("M", int(mm.group(2)), mon)
+        if m.close_time:
+            # the data month is at or before the release month
+            y = m.close_time.year if mon <= m.close_time.month else m.close_time.year - 1
+            return ("M", y, mon)
     if ev.platform == "kalshi" and (k := re.search(r"-(\d\d)([A-Z]{3})(?:\d\d)?$", ev.event_id)):
         if k.group(2).lower() in _MON:
             return ("M", 2000 + int(k.group(1)), _MON[k.group(2).lower()])
-    if (mm := re.search(r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\b", t)) \
-            and m.close_time:
-        mon = _MON[mm.group(1)[:3]]
-        y = m.close_time.year
-        # releases come after the reference month: pick the year that puts the month at/just before close
-        if mon > m.close_time.month + 1:
-            y -= 1
-        return ("M", y, mon)
     return None
 
 
@@ -160,19 +185,19 @@ def build_groups(events: dict[str, list[Event]]) -> dict[tuple, list[Priced]]:
                 continue
             for m in ev.markets:
                 iv = kalshi_interval(m, u)
-                per = period_of(ev, m)
+                per = period_of(ev, m, u.period)
                 if iv and per:
                     groups[(u.id, per)].append(Priced(m, iv))
         for ev in events.get("polymarket", []):
             if not u.matches_polymarket(ev.title):
                 continue
             rules = " ".join(m.rules for m in ev.markets[:1]).lower()
-            half_open = "higher range bracket" in rules or "higher bracket" in rules
+            half_open = bool(re.search(r"(higher|upper) (range )?bracket|falls exactly .{0,80}higher", rules))
             parsed = [(m, polymarket_interval(m.outcome_label or "", u, half_open)) for m in ev.markets]
             if any(iv is None for _, iv in parsed) or not _validate_buckets([iv for _, iv in parsed]):
                 continue        # refuse to guess on events we can't parse cleanly
             for m, iv in parsed:
-                per = period_of(ev, m)
+                per = period_of(ev, m, u.period)
                 if per:
                     groups[(u.id, per)].append(Priced(m, iv))
     return groups
@@ -215,6 +240,123 @@ def solve_cover(items: list[Priced]) -> tuple[list[tuple[Priced, str]], list[int
     return [(cands[j][0], cands[j][1]) for j in pick], outcomes, float(cost[pick].sum())
 
 
+# ---------------------------------------------------------------- risk-aware choice
+
+def _mid(m: BinaryMarket) -> float | None:
+    if m.yes_ask is not None and m.no_ask is not None:
+        return (m.yes_ask + 1 - m.no_ask) / 2
+    return None
+
+
+def implied_distribution(items: list[Priced], outcomes: list[int]) -> np.ndarray:
+    """Market-implied probability of each printed value: non-negative least squares fit
+    of every two-sided market's mid price, constrained to sum to 1."""
+    from scipy.optimize import nnls
+    rows, target = [], []
+    for it in items:
+        mid = _mid(it.market)
+        if mid is None:
+            continue
+        rows.append([1.0 if it.interval.contains(t) else 0.0 for t in outcomes])
+        target.append(mid)
+    n = len(outcomes)
+    if not rows:
+        return np.full(n, 1 / n)
+    big = 100.0
+    A = np.vstack([np.array(rows), big * np.ones((1, n))])
+    b = np.concatenate([np.array(target), [big]])
+    p, _ = nnls(A, b)
+    tot = p.sum()
+    return p / tot if tot > 0 else np.full(n, 1 / n)
+
+
+@dataclass
+class CoverChoice:
+    legs: list            # [(Priced, side)]
+    cost: float           # per $1 bundle incl. unit fees
+    expected_payout: float
+    risk: float
+    risk_parts: dict
+
+    @property
+    def guaranteed(self) -> float:
+        return 1 - self.cost
+
+    @property
+    def expected_profit(self) -> float:
+        return self.expected_payout - self.cost
+
+
+def risk_of(legs, u: Underlying | None) -> tuple[float, dict]:
+    """Rough $-per-bundle penalty for things the worst-case math can't see.
+
+    legging     - each extra leg is another order that can fail / move before it fills
+    cross_venue - two platforms: non-atomic execution, capital on both, two settlement processes
+    rules       - residual rule differences for this underlying (registry rule_risk)
+    """
+    venues = {it.market.platform for it, _ in legs}
+    cross = len(venues) > 1
+    parts = {"legging": 0.002 * max(len(legs) - 1, 0),
+             "cross_venue": 0.004 if cross else 0.0,
+             "rules": (u.rule_risk if (u and cross) else 0.0)}
+    return sum(parts.values()), parts
+
+
+def candidate_covers(items: list[Priced], k: int = 6):
+    """Up to k distinct cheapest covers (MILP with no-good cuts), each still < $1."""
+    bounds = [b for it in items for b in (it.interval.lo, it.interval.hi) if math.isfinite(b)]
+    if not bounds:
+        return [], []
+    outcomes = list(range(int(min(bounds)) - 1, int(max(bounds)) + 2))
+    cands = []
+    for it in items:
+        for side in ("yes", "no"):
+            c = _unit_cost(it.market, side)
+            if c is not None:
+                cands.append((it, side, c))
+    if len(cands) < 2:
+        return [], outcomes
+    A = np.zeros((len(outcomes), len(cands)))
+    for j, (it, side, _) in enumerate(cands):
+        for i, t in enumerate(outcomes):
+            A[i, j] = 1.0 if it.interval.contains(t) == (side == "yes") else 0.0
+    cost = np.array([c for _, _, c in cands])
+    cons = [LinearConstraint(A, lb=np.ones(len(outcomes)), ub=np.inf)]
+    found = []
+    for _ in range(k):
+        res = milp(cost, constraints=cons, integrality=np.ones(len(cands)), bounds=(0, 1))
+        if not res.success:
+            break
+        pick = [j for j, x in enumerate(res.x) if x > 0.5]
+        c = float(cost[pick].sum())
+        if c >= 1:
+            break
+        found.append(([(cands[j][0], cands[j][1]) for j in pick], c, A[:, pick].sum(axis=1)))
+        row = np.zeros(len(cands)); row[pick] = 1
+        cons.append(LinearConstraint(row.reshape(1, -1), lb=-np.inf, ub=len(pick) - 1))
+    return found, outcomes
+
+
+def choose_cover(items: list[Priced], u: Underlying | None = None, *, k: int = 6,
+                 similar_tol: float = 0.003, risk_aversion: float = 1.0
+                 ) -> tuple[CoverChoice | None, list[CoverChoice], list[int]]:
+    """Score = expected profit - risk_aversion * risk ($ per $1 bundle).  Among covers
+    within `similar_tol` of the best score, pick the lowest-risk one."""
+    found, outcomes = candidate_covers(items, k)
+    if not found:
+        return None, [], outcomes
+    p = implied_distribution(items, outcomes)
+    choices = []
+    for legs, c, payout_vec in found:
+        r, parts = risk_of(legs, u)
+        choices.append(CoverChoice(legs, c, float(p @ payout_vec), r, parts))
+    score = lambda ch: ch.expected_profit - risk_aversion * ch.risk  # noqa: E731
+    best = max(score(ch) for ch in choices)
+    near = [ch for ch in choices if score(ch) >= best - similar_tol]
+    pick = min(near, key=lambda ch: (round(ch.risk, 6), -ch.expected_profit))
+    return pick, choices, outcomes
+
+
 def _fmt_tick(t: int, step: float) -> str:
     v = t * step
     return f"{v:g}"
@@ -225,12 +367,10 @@ def numeric_bundles(events: dict[str, list[Event]]) -> list[Opportunity]:
     reg = {u.id: u for u in REGISTRY}
     for (uid, per), items in build_groups(events).items():
         u = reg[uid]
-        sol = solve_cover(items)
-        if not sol:
+        pick, alts, outcomes = choose_cover(items, u)
+        if pick is None:
             continue
-        chosen, outcomes, cost = sol
-        if cost >= 1:
-            continue
+        chosen = pick.legs
         legs = [Leg(it.market, side) for it, side in chosen]
         lo, hi = outcomes[0], outcomes[-1]
         scen = []
@@ -242,11 +382,18 @@ def numeric_bundles(events: dict[str, list[Event]]) -> list[Opportunity]:
             scen.append((label, winners))
         venues = {l.market.platform for l in legs}
         tier = "A" if len(venues) == 1 else "B"
-        title = f"{uid} {per[1]}-{'Q' if per[0] == 'Q' else ''}{per[2]:02d}"
+        title = f"{uid} {per[1]}-{'Q' if per[0] == 'Q' else ''}{per[2]:02d}" + (f"-{per[3]:02d}" if len(per) > 3 else "")
         notes = [f"settles on: {u.source}"]
         if u.caveats:
             notes.append(f"caveat: {u.caveats}")
         if tier == "B":
             notes.append("cross-venue bundle on a registry-verified underlying; legs are not atomic")
-        out.append(Opportunity("numeric", title, legs, scen, tier, notes))
+        notes.append(f"risk ${pick.risk:.3f}/bundle {pick.risk_parts}; guaranteed ${pick.guaranteed:.3f}, "
+                     f"expected ${pick.expected_profit:.3f} per $1 bundle "
+                     f"(lowest-risk of {len(alts)} alternatives within $0.003 of the best risk-adjusted score)")
+        out.append(Opportunity("numeric", title, legs, scen, tier, notes,
+                               meta={"risk": pick.risk, "risk_parts": pick.risk_parts,
+                                     "expected_profit_unit": pick.expected_profit,
+                                     "guaranteed_unit": pick.guaranteed, "alternatives": len(alts),
+                                     "underlying": uid}))
     return out

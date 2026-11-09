@@ -24,7 +24,8 @@ from pathlib import Path
 
 from .. import fees as feemod
 from ..models import BinaryMarket, Event, parse_ts
-from ..numeric import build_groups, solve_cover
+from ..numeric import build_groups, choose_cover, solve_cover
+from ..underlyings import REGISTRY
 
 H = 3600
 
@@ -53,6 +54,11 @@ class SimConfig:
     # that market over the previous 24h (None = no cap). Polymarket history has no
     # volume, so its legs stay depth-model only.
     max_participation: float | None = None
+    # --- capital management (added 2026-11-09) ---
+    max_trade_frac: float = 1.0      # max share of current equity one new bundle may use
+    early_exit: bool = False         # sell held bundles early (at bids) when it pays
+    switch_margin: float = 0.5       # new APY must beat a held bundle's remaining APY by this much
+    risk_chooser: bool = False       # pick lowest-risk cover among similar risk-adjusted EV
     platforms: tuple = ("kalshi", "polymarket")
     label: str = ""
 
@@ -158,6 +164,45 @@ def quote(sm: SimMarket, t: int, cfg: SimConfig):
     return ya, na
 
 
+def _annualize(growth: float, days: float) -> float:
+    try:
+        return growth ** (365 / days) - 1
+    except OverflowError:
+        return math.inf
+
+
+def quote_bid(sm: SimMarket, t: int, cfg: SimConfig):
+    """(yes_bid, no_bid) at time t - what we could SELL at."""
+    if t >= sm.close_ts or not sm.times:
+        return None
+    i = bisect.bisect_right(sm.times, t) - 1
+    if i < 0 or t - sm.times[i] > cfg.max_staleness_h * H:
+        return None
+    if sm.bm.platform == "kalshi":
+        ask, bid = sm.a[i], sm.b[i]
+        yb = bid if bid is not None and 0 < bid < 1 else None
+        nb = round(1 - ask, 4) if ask is not None and 0 < ask < 1 else None
+        return yb, nb
+    p = sm.a[i]
+    if p is None:
+        return None
+    return max(0.0, p - cfg.pm_half_spread), max(0.0, 1 - p - cfg.pm_half_spread)
+
+
+def staircase_total(price: float, qty: int, depth: float, consumed: float, sign: int) -> float:
+    """Total $ for qty contracts when each `depth` contracts move the price 1c
+    (sign=+1 buying walks up, -1 selling walks down)."""
+    total, k = 0.0, 0
+    while k < qty:
+        level = math.floor((consumed + k) / depth)
+        room = min(qty - k, (level + 1) * depth - (consumed + k))
+        room = max(1, int(math.ceil(room)))
+        room = min(room, qty - k)
+        total += room * max(0.0, price + sign * 0.01 * level)
+        k += room
+    return total
+
+
 @dataclass
 class Position:
     group: tuple
@@ -169,6 +214,8 @@ class Position:
     fees: float
     payout: float = 0.0
     closed: bool = False
+    exited_early: bool = False
+    exit_proceeds: float = 0.0
 
 
 def _leg_marginal(sm: SimMarket, side: str, ask: float, consumed: float, k: int, cfg: SimConfig) -> float:
@@ -181,6 +228,7 @@ def _leg_marginal(sm: SimMarket, side: str, ask: float, consumed: float, k: int,
 def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
     t0, t1 = int(start.timestamp()), int(end.timestamp())
     solve_cache: dict = {}
+    reg = {u.id: u for u in REGISTRY}
     pm_events: dict[str, list[SimMarket]] = {}
     for (plat, _), sm in sims.items():
         if plat == "polymarket":
@@ -241,7 +289,11 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
                 continue
             ck = (gkey, tuple((it.market.market_id, it.market.yes_ask, it.market.no_ask) for it in live))
             if ck not in solve_cache:
-                solve_cache[ck] = solve_cover(live)
+                if cfg.risk_chooser:
+                    pick, _, outc = choose_cover(live, reg.get(gkey[0]))
+                    solve_cache[ck] = (pick.legs, outc, pick.cost) if pick else None
+                else:
+                    solve_cache[ck] = solve_cover(live)
             sol = solve_cache[ck]
             if not sol or sol[2] > 1 - cfg.min_edge:
                 continue
@@ -255,9 +307,57 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
             if apy >= cfg.min_apy:
                 cands.append((apy, gkey, legs, settle))
         cands.sort(key=lambda c: -c[0])
+
+        def exit_value(p: Position, at: int) -> float | None:
+            total = 0.0
+            for sm, side, q, c, f in p.legs:
+                qb = quote_bid(sm, at, cfg)
+                bid = None if qb is None else (qb[0] if side == "yes" else qb[1])
+                if bid is None or bid <= 0:
+                    return None
+                depth = cfg.depth_kalshi if sm.bm.platform == "kalshi" else cfg.depth_pm
+                key = (sm.bm.platform, sm.bm.market_id, side + "_bid")
+                gross = q * bid if cfg.unlimited_depth else staircase_total(bid, q, depth, used(key, at), -1)
+                total += gross - sm.bm.fee.taker_fee(gross / q, q)
+            return total
+
+        def sell(p: Position, at: int, proceeds: float):
+            nonlocal cash
+            for sm, side, q, *_ in p.legs:
+                key = (sm.bm.platform, sm.bm.market_id, side + "_bid")
+                consumed[key] = (used(key, at) + q, at)
+            cash += proceeds
+            p.closed, p.exited_early, p.exit_proceeds = True, True, proceeds
+
+        open_pos = [p for p in positions if not p.closed]
+        if cfg.early_exit:
+            # (a) a bundle that can be sold for >= its guaranteed payout: take it now
+            for p in open_pos:
+                ev = exit_value(p, t)
+                if ev is not None and ev >= p.qty:
+                    sell(p, t, ev)
+        equity_now = cash + sum(p.cost + p.fees for p in positions if not p.closed)
         for apy, gkey, legs, settle in cands:
-            if cash < 1:
-                break
+            budget = equity_now * cfg.max_trade_frac
+            if cfg.early_exit and cash < budget:
+                # (b) switch: sell held bundles whose remaining return is much worse
+                held = []
+                for p in positions:
+                    if p.closed or p.group == gkey:
+                        continue
+                    ev = exit_value(p, t)
+                    if ev is None or ev <= 0:
+                        continue
+                    days_left = max((p.settles - t) / 86400, 1 / 24)
+                    hold_apy = (p.qty / ev) ** (365 / max(days_left, 1)) - 1
+                    held.append((hold_apy, ev, p))
+                for hold_apy, ev, p in sorted(held, key=lambda x: x[0]):
+                    if cash >= budget or hold_apy > apy - cfg.switch_margin:
+                        break
+                    sell(p, t, ev)
+            spend_cap = min(cash, budget)
+            if spend_cap < 1:
+                continue
             attempts += 1
             te = t + cfg.latency_hours * H
             # re-quote chosen legs at execution time
@@ -284,7 +384,7 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
                 marg = [_leg_marginal(sm, side, ask, c0, qty, cfg) for sm, side, ask, c0, _ in exec_legs]
                 mfee = [sm.bm.fee.taker_fee(p, 1, round_up=False) for (sm, *_), p in zip(exec_legs, marg)]
                 unit = sum(marg) + sum(mfee)
-                if unit > 1 - cfg.min_edge or spent + unit > cash or any(p >= 1 for p in marg) or qty >= qcap:
+                if unit > 1 - cfg.min_edge or spent + unit > spend_cap or any(p >= 1 for p in marg) or qty >= qcap:
                     break
                 qty += 1
                 spent += unit
@@ -302,6 +402,7 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
             cost = sum(c for *_, c, _ in leg_rows)
             if cost + fees_total > cash:
                 continue
+            equity_now = cash + sum(p.cost + p.fees for p in positions if not p.closed)
             payout = 0.0
             for sm, side, q, *_ in leg_rows:
                 v = sm.yes_value
@@ -322,8 +423,10 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
         "opened": datetime.fromtimestamp(p.opened, timezone.utc).isoformat(),
         "settles": datetime.fromtimestamp(p.settles, timezone.utc).isoformat(),
         "qty": p.qty, "cost": round(p.cost + p.fees, 2), "fees": round(p.fees, 2),
-        "payout": round(p.payout, 2), "pnl": round(p.payout - p.cost - p.fees, 2),
-        "guaranteed_min": p.qty, "worst_case_held": p.payout >= p.qty - 1e-9,
+        "payout": round(p.exit_proceeds if p.exited_early else p.payout, 2),
+        "pnl": round((p.exit_proceeds if p.exited_early else p.payout) - p.cost - p.fees, 2),
+        "exited_early": p.exited_early,
+        "guaranteed_min": p.qty, "worst_case_held": p.exited_early or p.payout >= p.qty - 1e-9,
         "legs": [f"{sm.bm.platform}:{sm.bm.outcome_label or sm.bm.market_id} {side.upper()} {q}@{c / q:.3f}"
                  for sm, side, q, c, f in p.legs],
     } for p in positions]
@@ -331,6 +434,6 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
     days = (t1 - t0) / 86400
     return {"config": cfg.__dict__, "final": final, "pnl": final - cfg.bankroll,
             "return": final / cfg.bankroll - 1,
-            "annualized": (final / cfg.bankroll) ** (365 / days) - 1,
+            "annualized": _annualize(final / cfg.bankroll, days),
             "trades": trades, "attempts": attempts, "executed": executed, "vanished": vanished,
             "equity": equity, "mismatches": [x for x in trades if not x["worst_case_held"]]}

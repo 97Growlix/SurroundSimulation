@@ -82,6 +82,7 @@ class Opportunity:
     apy: float = 0.0
     fills: list[Fill] = field(default_factory=list)
     depth_checked: bool = False
+    meta: dict = field(default_factory=dict)       # e.g. risk score, expected profit
 
     def key(self) -> str:
         return self.kind + "|" + "|".join(sorted(l.describe() for l in self.legs))

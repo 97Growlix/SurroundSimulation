@@ -84,3 +84,24 @@ def test_volume_cap_limits_kalshi_leg():
                     latency_hours=0, replenish_hours=0, max_participation=0.5)
     r = run(groups, sims, T0, T1, cfg)
     assert all(t["qty"] <= 12 for t in r["trades"])   # <= 50% of <=24 contracts/day
+
+
+def test_early_exit_sells_when_bundle_is_worth_more_than_its_payout():
+    groups, sims = setup()
+    k = sims[("kalshi", "K")]
+    # after hour 5 the Kalshi bid jumps to 0.95: bundle bids = 0.95 + 0.02 + 0.09 = 1.06 > $1 payout
+    k.b = [0.83] * 5 + [0.95] * (len(k.times) - 5)
+    base = dict(pm_sum_tolerance=10, bankroll=100, pm_half_spread=0, unlimited_depth=True,
+                latency_hours=0, replenish_hours=0, min_edge=0.001)
+    held = run(groups, sims, T0, T1, SimConfig(**base))
+    exited = run(groups, sims, T0, T1, SimConfig(**base, early_exit=True))
+    assert any(t["exited_early"] for t in exited["trades"])
+    assert exited["final"] > held["final"]
+
+
+def test_trade_size_cap_limits_each_bundle():
+    groups, sims = setup()
+    cfg = SimConfig(pm_sum_tolerance=10, bankroll=100, pm_half_spread=0, unlimited_depth=True,
+                    latency_hours=0, replenish_hours=0, max_trade_frac=0.25)
+    r = run(groups, sims, T0, T1, cfg)
+    assert r["trades"] and all(t["cost"] <= 25.5 for t in r["trades"])

@@ -21,7 +21,10 @@ from ..underlyings import REGISTRY
 
 OUT = Path(__file__).resolve().parents[2] / "data" / "backtest"
 PM_QUERIES = ["Core CPI MoM", "CPI MoM", "Core CPI YoY", "CPI YoY", "Core PCE MoM",
-              "US GDP growth in Q", "Fed decision in", "Inflation US - Monthly", "Inflation US - Annual"]
+              "US GDP growth in Q", "Fed decision in", "Inflation US - Monthly", "Inflation US - Annual",
+              "Unemployment Rate", "PPI YoY", "Producer Price Index", "JOLTS Job Openings",
+              "Bank of England decision", "Bank of Canada Decision", "Reserve Bank of Australia Decision",
+              "Gas prices on"]
 
 
 def _ts(dt: datetime) -> int:
@@ -72,11 +75,13 @@ def kalshi_candles(series: str, ticker: str, start: int, end: int, historical: b
     return out
 
 
-def collect_kalshi(start: datetime, end: datetime) -> list[dict]:
+def collect_kalshi(start: datetime, end: datetime, skip_series: set | None = None) -> list[dict]:
     cutoff = parse_ts(get_json(K + "/historical/cutoff").get("market_settled_ts"))
     events = []
     for u in REGISTRY:
         for series in u.kalshi_series:
+            if skip_series and series in skip_series:
+                continue
             cursor = None
             while True:
                 p = {"series_ticker": series, "status": "settled", "with_nested_markets": "true", "limit": 100}
@@ -114,10 +119,11 @@ def collect_kalshi(start: datetime, end: datetime) -> list[dict]:
     return events
 
 
-def collect_polymarket(start: datetime, end: datetime) -> list[dict]:
+def collect_polymarket(start: datetime, end: datetime, skip_ids: set | None = None) -> list[dict]:
     seen, events = set(), []
+    pages_max = 12
     for q in PM_QUERIES:
-        for page in range(1, 6):
+        for page in range(1, pages_max + 1):
             d = get_json(f"{GAMMA}/public-search", {"q": q, "events_status": "closed", "limit_per_type": 50,
                                                      "page": page})
             hits = d.get("events", []) if isinstance(d, dict) else []
@@ -131,6 +137,8 @@ def collect_polymarket(start: datetime, end: datetime) -> list[dict]:
                     continue
                 endd = parse_ts(h.get("endDate"))
                 if not endd or not (start <= endd <= end):
+                    continue
+                if skip_ids and str(h.get("id")) in skip_ids:
                     continue
                 full = get_json(f"{GAMMA}/events", {"slug": h["slug"]})
                 if not full:
@@ -174,11 +182,25 @@ def _cached(name: str, fn):
     return d
 
 
+def _topup(name: str, fn):
+    """Load cached events and fetch only what's missing (new registry underlyings)."""
+    f = OUT / f"{name}.json"
+    have = json.loads(f.read_text()) if f.exists() else []
+    new = fn(have)
+    if new:
+        have += new
+        f.write_text(json.dumps(have))
+    log(f"{name}: {len(have)} events ({len(new)} new)")
+    return have
+
+
 def main(start: datetime, end: datetime) -> Path:
     OUT.mkdir(parents=True, exist_ok=True)
     data = {"start": start.isoformat(), "end": end.isoformat(),
-            "kalshi": _cached("kalshi", lambda: collect_kalshi(start, end)),
-            "polymarket": _cached("polymarket", lambda: collect_polymarket(start, end))}
+            "kalshi": _topup("kalshi", lambda have: collect_kalshi(
+                start, end, skip_series={e["series"] for e in have})),
+            "polymarket": _topup("polymarket", lambda have: collect_polymarket(
+                start, end, skip_ids={e["event_id"] for e in have}))}
     path = OUT / "raw.json"
     path.write_text(json.dumps(data))
     return path
