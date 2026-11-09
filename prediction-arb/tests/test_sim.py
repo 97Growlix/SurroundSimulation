@@ -31,7 +31,7 @@ def setup(k_ask=0.85, pm_low=0.02, pm_mid=0.09, result_print=2):
 
 def test_frictionless_profit_matches_arithmetic():
     groups, sims = setup()
-    cfg = SimConfig(bankroll=100, pm_half_spread=0, unlimited_depth=True, latency_hours=0,
+    cfg = SimConfig(pm_sum_tolerance=10, bankroll=100, pm_half_spread=0, unlimited_depth=True, latency_hours=0,
                     replenish_hours=0, min_edge=0.001)
     r = run(groups, sims, T0, T1, cfg)
     t = r["trades"][0]
@@ -42,14 +42,14 @@ def test_frictionless_profit_matches_arithmetic():
 
 def test_spread_kills_marginal_edge():
     groups, sims = setup(k_ask=0.88)            # 0.88 + 0.02 + 0.09 = 0.99 at mid
-    cfg = SimConfig(bankroll=100, pm_half_spread=0.01, latency_hours=0)
+    cfg = SimConfig(pm_sum_tolerance=10, bankroll=100, pm_half_spread=0.01, latency_hours=0)
     r = run(groups, sims, T0, T1, cfg)
     assert r["executed"] == 0                    # +2c of Polymarket spread makes it 1.01
 
 
 def test_depth_caps_size_and_refill_limits_repeat_trading():
     groups, sims = setup()
-    cfg = SimConfig(bankroll=10_000, pm_half_spread=0, depth_kalshi=50, depth_pm=50, latency_hours=0,
+    cfg = SimConfig(pm_sum_tolerance=10, bankroll=10_000, pm_half_spread=0, depth_kalshi=50, depth_pm=50, latency_hours=0,
                     replenish_hours=1000)
     r = run(groups, sims, T0, T1, cfg)
     total_qty = sum(t["qty"] for t in r["trades"])
@@ -61,5 +61,15 @@ def test_depth_caps_size_and_refill_limits_repeat_trading():
 def test_payout_uses_actual_results_whatever_the_print():
     for printed in (0, 1, 2, 5):
         groups, sims = setup(result_print=printed)
-        r = run(groups, sims, T0, T1, SimConfig(pm_half_spread=0, latency_hours=0))
+        r = run(groups, sims, T0, T1, SimConfig(pm_sum_tolerance=10, pm_half_spread=0, latency_hours=0))
         assert all(t["worst_case_held"] for t in r["trades"])
+
+
+def test_stale_polymarket_prices_are_not_traded():
+    """Buckets whose prices sum far from 1 indicate stale history: skip them."""
+    groups, sims = setup(pm_low=0.02, pm_mid=0.09)
+    # P0+P1 are only two buckets of the event, summing to 0.11 -> inconsistent
+    cfg = SimConfig(pm_half_spread=0, unlimited_depth=True, latency_hours=0, pm_sum_tolerance=0.05)
+    assert run(groups, sims, T0, T1, cfg)["executed"] == 0
+    cfg = SimConfig(pm_half_spread=0, unlimited_depth=True, latency_hours=0, pm_sum_tolerance=10)
+    assert run(groups, sims, T0, T1, cfg)["executed"] >= 1

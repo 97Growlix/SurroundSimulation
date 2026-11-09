@@ -140,6 +140,7 @@ def collect_polymarket(start: datetime, end: datetime) -> list[dict]:
                         "title": m.get("question"), "outcome_prices": json.loads(m.get("outcomePrices") or "[]"),
                         "fees_enabled": bool(m.get("feesEnabled")), "fee_schedule": m.get("feeSchedule"),
                         "end": m.get("endDate") or ev.get("endDate"), "rules": m.get("description") or "",
+                        "closed_time": m.get("closedTime"),
                         "history": [{"t": int(p["t"]), "p": float(p["p"])} for p in hist],
                     })
                 events.append({"platform": "polymarket", "event_id": str(ev["id"]), "title": ev["title"],

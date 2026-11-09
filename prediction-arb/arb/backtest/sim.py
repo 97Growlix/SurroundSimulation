@@ -42,6 +42,12 @@ class SimConfig:
     settle_delay_kalshi_h: float = 3
     settle_delay_pm_h: float = 24
     max_staleness_h: float = 3
+    # Polymarket bucket events: if the YES prices of an event's buckets don't sum to
+    # ~1 at time t, some prices are stale/untraded - don't trust that event at t.
+    pm_sum_tolerance: float = 0.05
+    # Polymarket events closed this long before their scheduled end were abandoned /
+    # duplicates; their "resolution" is not a real outcome.
+    pm_early_close_days: float = 2.0
     unlimited_depth: bool = False
     platforms: tuple = ("kalshi", "polymarket")
     label: str = ""
@@ -83,15 +89,37 @@ def load(raw_path: Path):
                               close_time=parse_ts(m["end"]), fee=fee, rules=m.get("rules", ""))
             op = m.get("outcome_prices") or []
             yv = float(op[0]) if op else None
-            sm = SimMarket(bm, yv if yv in (0.0, 0.5, 1.0) else None, int(parse_ts(m["end"]).timestamp()))
+            end_ts = int(parse_ts(m["end"]).timestamp())
+            closed = parse_ts(m.get("closed_time") or "")
+            if closed and closed.timestamp() < end_ts - SimConfig.pm_early_close_days * 86400:
+                continue          # abandoned / duplicate market
+            close_ts = min(end_ts, int(closed.timestamp())) if closed else end_ts
+            sm = SimMarket(bm, yv if yv in (0.0, 0.5, 1.0) else None, close_ts)
             for p in sorted(m["history"], key=lambda p: p["t"]):
                 sm.times.append(p["t"]); sm.a.append(p["p"]); sm.b.append(None)
             sims[("polymarket", bm.market_id)] = sm
             ms.append(bm)
-        events["polymarket"].append(Event("polymarket", ev["event_id"], ev["title"], ms,
-                                          mutually_exclusive=bool(ev.get("neg_risk"))))
+        if ms:
+            events["polymarket"].append(Event("polymarket", ev["event_id"], ev["title"], ms,
+                                              mutually_exclusive=bool(ev.get("neg_risk"))))
     groups = build_groups(events)
     return raw, groups, sims
+
+
+def _last_price(sm: SimMarket, t: int, cfg: SimConfig):
+    if t >= sm.close_ts or not sm.times:
+        return None
+    i = bisect.bisect_right(sm.times, t) - 1
+    if i < 0 or t - sm.times[i] > cfg.max_staleness_h * H:
+        return None
+    return sm.a[i]
+
+
+def pm_event_consistent(members: list[SimMarket], t: int, cfg: SimConfig) -> bool:
+    ps = [_last_price(m, t, cfg) for m in members]
+    if any(p is None for p in ps):
+        return False
+    return abs(sum(ps) - 1) <= cfg.pm_sum_tolerance
 
 
 def quote(sm: SimMarket, t: int, cfg: SimConfig):
@@ -137,11 +165,24 @@ def _leg_marginal(sm: SimMarket, side: str, ask: float, consumed: float, k: int,
 def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
     t0, t1 = int(start.timestamp()), int(end.timestamp())
     solve_cache: dict = {}
+    pm_events: dict[str, list[SimMarket]] = {}
+    for (plat, _), sm in sims.items():
+        if plat == "polymarket":
+            pm_events.setdefault(sm.bm.event_id, []).append(sm)
+    consistent_cache: dict = {}
+
+    def pm_ok(sm, t):
+        if sm.bm.platform != "polymarket" or len(pm_events.get(sm.bm.event_id, [])) < 2:
+            return True
+        k = (sm.bm.event_id, t)
+        if k not in consistent_cache:
+            consistent_cache[k] = pm_event_consistent(pm_events[sm.bm.event_id], t, cfg)
+        return consistent_cache[k]
     # each group is only tradable between its first price and its last close
     windows = {}
     for gkey, items in groups.items():
         sm = [sims[(it.market.platform, it.market.market_id)] for it in items
-              if it.market.platform in cfg.platforms]
+              if it.market.platform in cfg.platforms and (it.market.platform, it.market.market_id) in sims]
         ts = [x.times[0] for x in sm if x.times]
         if len(ts) >= 2:
             windows[gkey] = (min(ts), max(x.close_ts for x in sm))
@@ -172,7 +213,9 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
             for it in items:
                 if it.market.platform not in cfg.platforms:
                     continue
-                sm = sims[(it.market.platform, it.market.market_id)]
+                sm = sims.get((it.market.platform, it.market.market_id))
+                if sm is None or not pm_ok(sm, t):
+                    continue
                 q = quote(sm, t, cfg)
                 if q is None:
                     continue
@@ -205,7 +248,7 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
             exec_legs = []
             for it, side in legs:
                 sm = sims[(it.market.platform, it.market.market_id)]
-                q = quote(sm, te, cfg)
+                q = quote(sm, te, cfg) if pm_ok(sm, te) else None
                 ask = None if q is None else (q[0] if side == "yes" else q[1])
                 if ask is None:
                     break
