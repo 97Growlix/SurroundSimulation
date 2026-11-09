@@ -324,7 +324,14 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
                 else:
                     solve_cache[ck] = solve_cover(live)
             sol = solve_cache[ck]
+            near_miss = False
             if cfg.maker and not any(r["gkey"] == gkey for r in resting):
+                tkey = ("tk",) + ck
+                if tkey not in solve_cache:
+                    solve_cache[tkey] = solve_cover(live) if cfg.risk_chooser else sol
+                tc = solve_cache[tkey]
+                near_miss = bool(tc) and 1 - cfg.min_edge < tc[2] <= 1 + cfg.maker_window
+            if near_miss:
                 # One resting bid per bundle: try the widest-spread Kalshi legs one at a time,
                 # pricing only that leg at bid+1c and everything else at the ask.
                 spreads = []
@@ -337,9 +344,9 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
                     for sd, ask, bid in (("yes", it.market.yes_ask, qb[0]), ("no", it.market.no_ask, qb[1])):
                         if ask is not None and bid and ask - bid >= 0.02:
                             spreads.append((ask - bid, idx, sd, round(bid + 0.01, 2)))
-                taker_cost = sol[2] if sol else math.inf
+                taker_cost = tc[2]
                 best_m = None
-                for _, idx, sd, mprice in sorted(spreads, reverse=True)[:6]:
+                for _, idx, sd, mprice in sorted(spreads, reverse=True)[:3]:
                     mview = list(live)
                     bm = live[idx].market
                     bm = replace(bm, yes_ask=mprice if sd == "yes" else bm.yes_ask,
