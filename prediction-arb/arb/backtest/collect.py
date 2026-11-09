@@ -72,6 +72,10 @@ def collect_kalshi(start: datetime, end: datetime) -> list[dict]:
                 d = get_json(K + "/events", p)
                 for ev in d.get("events", []):
                     mk = ev.get("markets") or []
+                    if not mk:
+                        # markets settled before the historical cutoff live in a separate archive
+                        mk = get_json(K + "/historical/markets", {"event_ticker": ev["event_ticker"],
+                                                                   "limit": 200}).get("markets", [])
                     closes = [parse_ts(m.get("close_time")) for m in mk if m.get("close_time")]
                     if not closes or not (start <= max(closes) <= end):
                         continue
