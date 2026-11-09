@@ -26,6 +26,10 @@ SCENARIOS = [
     replace(NEW, label="v2 + volume cap 10% + conservative", max_participation=0.10, pm_half_spread=0.02,
             depth_kalshi=100, depth_pm=75, latency_hours=2, replenish_hours=24),
     replace(NEW, label="v2 original underlyings only", platforms=("kalshi", "polymarket")),
+    replace(NEW, label="v2 + maker bids", maker=True),
+    replace(NEW, label="v2 + maker bids + volume cap 25%", maker=True, max_participation=0.25),
+    replace(NEW, label="v2 + maker, cautious (2c edge, 6h TTL, 3h blackout) + vol cap 25%", maker=True,
+            maker_min_edge=0.02, maker_ttl_hours=6, maker_blackout_hours=3, max_participation=0.25),
 ] + [replace(NEW, label=f"v2 + volume cap 25%, bankroll ${b:,}", bankroll=float(b), max_participation=0.25)
      for b in (1_000, 10_000, 100_000)]
 ORIGINAL = {"us_core_cpi_mom", "us_cpi_mom", "us_core_cpi_yoy", "us_cpi_yoy", "us_core_pce_mom",
@@ -65,6 +69,8 @@ def main():
         w = sum(x["pnl"] for x in r["trades"]) - g
         ex = sum(1 for x in r["trades"] if x["exited_early"])
         print(f"   {r['config']['label'][:70]:70} early exits {ex:4}  held-to-settle guaranteed ${g:,.2f}  other ${w:,.2f}")
+        if r["config"].get("maker"):
+            print(f"      maker: {r['maker']}")
     base = results[4]
     print("\nv2 trades ($100):")
     for x in base["trades"]:

@@ -59,6 +59,13 @@ class SimConfig:
     early_exit: bool = False         # sell held bundles early (at bids) when it pays
     switch_margin: float = 0.5       # new APY must beat a held bundle's remaining APY by this much
     risk_chooser: bool = False       # pick lowest-risk cover among similar risk-adjusted EV
+    # --- maker (resting limit order) option, Kalshi legs only ---
+    maker: bool = False
+    maker_window: float = 0.03       # consider bundles whose taker cost is up to $1.03
+    maker_min_edge: float = 0.01     # required edge if the resting bid fills (buffer vs adverse selection)
+    maker_fee_rate: float = 0.0175   # Kalshi maker fee coefficient (1/4 of taker), conservative
+    maker_ttl_hours: float = 24
+    maker_blackout_hours: float = 1  # pull resting bids this long before the release/close
     platforms: tuple = ("kalshi", "polymarket")
     label: str = ""
 
@@ -234,6 +241,27 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
         if plat == "polymarket":
             pm_events.setdefault(sm.bm.event_id, []).append(sm)
     consistent_cache: dict = {}
+    resting: list[dict] = []
+    mk_stats = {"posted": 0, "filled": 0, "completed": 0, "completed_at_loss": 0, "unwound": 0,
+                "cancelled": 0, "hedge_slippage": []}
+    maker_fee = feemod.FeeModel("kalshi", rate=cfg.maker_fee_rate)
+
+    def side_quote(sm, side, at):
+        q = quote(sm, at, cfg)
+        return None if q is None else (q[0] if side == "yes" else q[1])
+
+    def side_bid(sm, side, at):
+        q = quote_bid(sm, at, cfg)
+        return None if q is None else (q[0] if side == "yes" else q[1])
+
+    def hour_volume(sm, at):
+        if not sm.times:
+            return 0.0
+        i = bisect.bisect_right(sm.times, at) - 1
+        return sm.v[i] if i >= 0 and sm.times[i] > at - H and sm.v else 0.0
+
+    def reserved():
+        return sum(r["reserve"] for r in resting)
 
     def pm_ok(sm, t):
         if sm.bm.platform != "polymarket" or len(pm_events.get(sm.bm.event_id, [])) < 2:
@@ -269,6 +297,7 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
                 p.closed = True
         # find candidate bundles at time t
         cands = []
+        maker_cands = []
         for gkey, items in groups.items():
             w = windows.get(gkey)
             if not w or not (w[0] <= t < w[1]):
@@ -295,6 +324,38 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
                 else:
                     solve_cache[ck] = solve_cover(live)
             sol = solve_cache[ck]
+            if cfg.maker and not any(r["gkey"] == gkey for r in resting):
+                # One resting bid per bundle: try the widest-spread Kalshi legs one at a time,
+                # pricing only that leg at bid+1c and everything else at the ask.
+                spreads = []
+                for idx, it in enumerate(live):
+                    if it.market.platform != "kalshi":
+                        continue
+                    qb = quote_bid(sims[("kalshi", it.market.market_id)], t, cfg)
+                    if not qb:
+                        continue
+                    for sd, ask, bid in (("yes", it.market.yes_ask, qb[0]), ("no", it.market.no_ask, qb[1])):
+                        if ask is not None and bid and ask - bid >= 0.02:
+                            spreads.append((ask - bid, idx, sd, round(bid + 0.01, 2)))
+                taker_cost = sol[2] if sol else math.inf
+                best_m = None
+                for _, idx, sd, mprice in sorted(spreads, reverse=True)[:6]:
+                    mview = list(live)
+                    bm = live[idx].market
+                    bm = replace(bm, yes_ask=mprice if sd == "yes" else bm.yes_ask,
+                                 no_ask=mprice if sd == "no" else bm.no_ask)
+                    mview[idx] = type(live[idx])(bm, live[idx].interval)
+                    mkey = ("mk", ck, idx, sd, mprice)
+                    if mkey not in solve_cache:
+                        solve_cache[mkey] = solve_cover(mview)
+                    ms = solve_cache[mkey]
+                    if not ms or not any(it.market.market_id == bm.market_id and s2 == sd for it, s2 in ms[0]):
+                        continue
+                    if ms[2] <= 1 - cfg.maker_min_edge and ms[2] < taker_cost - 0.005 \
+                            and (best_m is None or ms[2] < best_m[0]):
+                        best_m = (ms[2], ms[0], bm.market_id, sd)
+                if best_m:
+                    maker_cands.append((gkey, best_m[1], best_m[2], best_m[3]))
             if not sol or sol[2] > 1 - cfg.min_edge:
                 continue
             legs, outcomes, unit = sol
@@ -336,7 +397,7 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
                 ev = exit_value(p, t)
                 if ev is not None and ev >= p.qty:
                     sell(p, t, ev)
-        equity_now = cash + sum(p.cost + p.fees for p in positions if not p.closed)
+        equity_now = cash + reserved() + sum(p.cost + p.fees for p in positions if not p.closed)
         for apy, gkey, legs, settle in cands:
             budget = equity_now * cfg.max_trade_frac
             if cfg.early_exit and cash < budget:
@@ -402,7 +463,7 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
             cost = sum(c for *_, c, _ in leg_rows)
             if cost + fees_total > cash:
                 continue
-            equity_now = cash + sum(p.cost + p.fees for p in positions if not p.closed)
+            equity_now = cash + reserved() + sum(p.cost + p.fees for p in positions if not p.closed)
             payout = 0.0
             for sm, side, q, *_ in leg_rows:
                 v = sm.yes_value
@@ -412,8 +473,115 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
             cash -= cost + fees_total
             positions.append(Position(gkey, te, settle, leg_rows, qty, cost, fees_total, payout))
             executed += 1
+        if cfg.maker:
+            # ---- 1. manage resting bids: cancel, or fill + hedge at the NEXT hour's prices
+            for r in list(resting):
+                msm, mside, price = r["maker"][0], r["maker"][1], r["price"]
+                hedge_now = [side_quote(sm, sd, t) for sm, sd in r["hedges"]]
+                est = None if any(h is None for h in hedge_now) else \
+                    price + maker_fee.taker_fee(price, 1, round_up=False) + sum(
+                        h + sm.bm.fee.taker_fee(h, 1, round_up=False) for (sm, _), h in zip(r["hedges"], hedge_now))
+                if t >= r["expires"] or t >= r["close_min"] - cfg.maker_blackout_hours * H \
+                        or est is None or est > 1 - cfg.maker_min_edge:
+                    cash += r["reserve"]; resting.remove(r); mk_stats["cancelled"] += 1
+                    continue
+                ask_now = side_quote(msm, mside, t)
+                vol = hour_volume(msm, t)
+                if ask_now is None or ask_now > price or vol <= 0:
+                    continue
+                q = int(min(r["qty"], math.floor(vol)))
+                if q < 1:
+                    continue
+                cash += r["reserve"]; resting.remove(r); mk_stats["filled"] += 1
+                cost_m = price * q + maker_fee.taker_fee(price, q)
+                te = t + cfg.latency_hours * H
+                hedge_rows, hedge_cost, ok = [], 0.0, True
+                for sm, sd in r["hedges"]:
+                    a = side_quote(sm, sd, te)
+                    if a is None:
+                        ok = False
+                        break
+                    depth = cfg.depth_kalshi if sm.bm.platform == "kalshi" else cfg.depth_pm
+                    key = (sm.bm.platform, sm.bm.market_id, sd)
+                    gross = q * a if cfg.unlimited_depth else staircase_total(a, q, depth, used(key, te), +1)
+                    f = sm.bm.fee.taker_fee(gross / q, q)
+                    hedge_rows.append((sm, sd, q, gross, f, key))
+                    hedge_cost += gross + f
+                if ok:
+                    mk_stats["hedge_slippage"].append(hedge_cost / q - (est - price - maker_fee.taker_fee(price, 1, round_up=False)))
+                b = side_bid(msm, mside, te)
+                proceeds = 0.0
+                if b:
+                    depth = cfg.depth_kalshi
+                    proceeds = staircase_total(b, q, depth, used((msm.bm.platform, msm.bm.market_id, mside + "_bid"), te), -1)
+                    proceeds -= msm.bm.fee.taker_fee(proceeds / q, q) if proceeds > 0 else 0
+                loss_complete = cost_m + hedge_cost - q if ok else math.inf
+                loss_unwind = cost_m - proceeds
+                if ok and (loss_complete <= 0 or loss_complete <= loss_unwind) and cash >= cost_m + hedge_cost:
+                    rows = [(msm, mside, q, price * q, maker_fee.taker_fee(price, q))] + \
+                           [(sm, sd, qq, g, f) for sm, sd, qq, g, f, _ in hedge_rows]
+                    for *_, key in hedge_rows:
+                        consumed[key] = (used(key, te) + q, te)
+                    payout = sum(qq * ((sm.yes_value or 0.0) if sd == "yes" else 1 - (sm.yes_value or 0.0))
+                                 for sm, sd, qq, *_ in rows)
+                    settle = max(sm.close_ts + (cfg.settle_delay_kalshi_h if sm.bm.platform == "kalshi"
+                                                else cfg.settle_delay_pm_h) * H for sm, *_ in rows)
+                    cost = sum(g for *_, g, _ in rows); fees_t = sum(f for *_, f in rows)
+                    cash -= cost + fees_t
+                    positions.append(Position(r["gkey"], te, settle, rows, q, cost, fees_t, payout))
+                    mk_stats["completed"] += 1
+                    mk_stats["completed_at_loss"] += loss_complete > 0
+                else:
+                    cash += proceeds - cost_m
+                    pos = Position(r["gkey"], te, te, [(msm, mside, q, price * q, maker_fee.taker_fee(price, q))],
+                                   q, price * q, maker_fee.taker_fee(price, q), 0.0)
+                    pos.closed, pos.exited_early, pos.exit_proceeds = True, True, proceeds
+                    positions.append(pos)
+                    mk_stats["unwound"] += 1
+            # ---- 2. post new resting bids on near-miss bundles
+            for gkey, legs, mid, mside in maker_cands:
+                if any(r["gkey"] == gkey for r in resting):
+                    continue
+                j = next(k for k, (it, sd) in enumerate(legs) if it.market.market_id == mid and sd == mside)
+                msm = sims[("kalshi", mid)]
+                b = side_bid(msm, mside, t)
+                if b is None:
+                    continue
+                price = round(b + 0.01, 2)
+                hedges = [(sims[(it.market.platform, it.market.market_id)], sd) for k, (it, sd) in enumerate(legs) if k != j]
+                hq = [side_quote(sm, sd, t) for sm, sd in hedges]
+                if any(h is None for h in hq):
+                    continue
+                unit = price + maker_fee.taker_fee(price, 1, round_up=False) + sum(
+                    h + sm.bm.fee.taker_fee(h, 1, round_up=False) for (sm, _), h in zip(hedges, hq))
+                if unit > 1 - cfg.maker_min_edge:
+                    continue
+                closes = [msm.close_ts] + [sm.close_ts for sm, _ in hedges]
+                settle = max(closes) + cfg.settle_delay_pm_h * H
+                apy = (1 / unit) ** (365 / max((settle - t) / 86400, 1)) - 1
+                if apy < cfg.min_apy:
+                    continue
+                equity_now = cash + reserved() + sum(p.cost + p.fees for p in positions if not p.closed)
+                cap = min(cash, equity_now * cfg.max_trade_frac)
+                qty = math.floor(cap / unit)
+                qty = min(qty, int(min(cfg.depth_kalshi if sm.bm.platform == "kalshi" else cfg.depth_pm
+                                       for sm, _ in hedges)))
+                if cfg.max_participation is not None:
+                    for sm, _ in hedges + [(msm, mside)]:
+                        if sm.bm.platform == "kalshi":
+                            qty = min(qty, math.floor(cfg.max_participation * sm.volume_24h(t)))
+                if qty < 1:
+                    continue
+                reserve = qty * unit
+                cash -= reserve
+                resting.append({"gkey": gkey, "maker": (msm, mside), "price": price, "qty": qty, "hedges": hedges,
+                                "expires": t + int(cfg.maker_ttl_hours * H), "close_min": min(closes),
+                                "reserve": reserve})
+                mk_stats["posted"] += 1
         locked = sum(p.cost + p.fees for p in positions if not p.closed)
-        equity.append((t, cash + locked))
+        equity.append((t, cash + locked + reserved()))
+    for r in resting:
+        cash += r["reserve"]
     for p in positions:
         if not p.closed:
             cash += p.payout
@@ -436,4 +604,8 @@ def run(groups, sims, start: datetime, end: datetime, cfg: SimConfig) -> dict:
             "return": final / cfg.bankroll - 1,
             "annualized": _annualize(final / cfg.bankroll, days),
             "trades": trades, "attempts": attempts, "executed": executed, "vanished": vanished,
-            "equity": equity, "mismatches": [x for x in trades if not x["worst_case_held"]]}
+            "equity": equity, "mismatches": [x for x in trades if not x["worst_case_held"]],
+            "maker": {k: (v if k != "hedge_slippage" else
+                          {"n": len(v), "mean": (sum(v) / len(v)) if v else 0.0,
+                           "worse_than_planned": sum(x > 0.001 for x in v)})
+                      for k, v in mk_stats.items()}}

@@ -105,3 +105,41 @@ def test_trade_size_cap_limits_each_bundle():
                     latency_hours=0, replenish_hours=0, max_trade_frac=0.25)
     r = run(groups, sims, T0, T1, cfg)
     assert r["trades"] and all(t["cost"] <= 25.5 for t in r["trades"])
+
+
+def _maker_setup(pm_after_fill=0.09):
+    """Taker bundle costs 0.90+0.02+0.09 = 1.01 (no arb). Kalshi bid 0.86 -> we rest at 0.87.
+    At hour 5 the Kalshi ask dips to 0.87 with volume -> fill; hedge next hour."""
+    groups, sims = setup(k_ask=0.90)
+    k = sims[("kalshi", "K")]
+    n = len(k.times)
+    k.a = [0.90] * 5 + [0.87] + [0.90] * (n - 6)
+    k.b = [0.86] * n
+    k.v = [10.0] * n
+    k.cumv = [10.0 * (i + 1) for i in range(n)]
+    p1 = sims[("polymarket", "P1")]
+    p1.a = [0.09] * 6 + [pm_after_fill] * (n - 6)
+    return groups, sims
+
+
+MAKER = dict(pm_sum_tolerance=10, bankroll=100, pm_half_spread=0, unlimited_depth=True, latency_hours=1,
+             replenish_hours=0, maker=True, maker_fee_rate=0.0)
+
+
+def test_maker_fill_completes_bundle_that_taker_could_not():
+    groups, sims = _maker_setup()
+    taker = run(groups, sims, T0, T1, SimConfig(**{**MAKER, "maker": False}))
+    maker = run(groups, sims, T0, T1, SimConfig(**MAKER))
+    assert taker["executed"] == 0
+    assert maker["maker"]["filled"] == 1 and maker["maker"]["completed"] == 1
+    assert maker["final"] == pytest.approx(100 + 10 * (1 - 0.98), abs=0.01)   # 10 contracts traded that hour
+
+
+def test_maker_adverse_move_after_fill_is_booked_as_a_loss():
+    groups, sims = _maker_setup(pm_after_fill=0.30)      # hedge leg jumps right after our fill
+    r = run(groups, sims, T0, T1, SimConfig(**MAKER))
+    assert r["maker"]["filled"] == 1
+    assert r["maker"]["unwound"] + r["maker"]["completed_at_loss"] == 1
+    assert r["maker"]["hedge_slippage"]["worse_than_planned"] == 1
+    maker_trade = r["trades"][0]                       # the filled bid, sold back at the bid
+    assert maker_trade["exited_early"] and maker_trade["pnl"] < 0
